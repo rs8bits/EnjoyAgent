@@ -1,0 +1,7 @@
+/target/
+/EnjoyAgent-backend/.idea/
+/.DS_Store
+/.env
+
+.idea/
+target/

@@ -1,0 +1,14 @@
+# 本地环境打开更多日志，便于学习和调试
+spring:
+  jpa:
+    show-sql: true
+
+enjoy:
+  model-gateway:
+    # 本地开发环境默认走百炼兼容接口，避免每次手动传 base url。
+    openai-base-url: https://dashscope.aliyuncs.com/compatible-mode
+
+logging:
+  level:
+    com.enjoy.agent: DEBUG
+    org.hibernate.SQL: DEBUG
