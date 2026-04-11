@@ -32,6 +32,10 @@ spring:
     listener:
       simple:
         default-requeue-rejected: false
+  servlet:
+    multipart:
+      max-file-size: ${APP_MULTIPART_MAX_FILE_SIZE:20MB}
+      max-request-size: ${APP_MULTIPART_MAX_REQUEST_SIZE:25MB}
   # JPA 基础配置
   jpa:
     hibernate:

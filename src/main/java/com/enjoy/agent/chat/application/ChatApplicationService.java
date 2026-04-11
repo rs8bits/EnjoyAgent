@@ -20,6 +20,7 @@ import com.enjoy.agent.chat.domain.entity.ChatMessage;
 import com.enjoy.agent.chat.domain.entity.ChatSession;
 import com.enjoy.agent.chat.domain.enums.ChatMessageRole;
 import com.enjoy.agent.chat.infrastructure.persistence.ChatMessageRepository;
+import com.enjoy.agent.chat.infrastructure.persistence.ChatSessionMemoryRepository;
 import com.enjoy.agent.chat.infrastructure.persistence.ChatSessionRepository;
 import com.enjoy.agent.knowledge.application.KnowledgeBaseApplicationService;
 import com.enjoy.agent.knowledge.application.KnowledgeRetrievalDebug;
@@ -183,7 +184,7 @@ public class ChatApplicationService {
      * 删除某个会话及其关联运行时数据。
      */
     public void deleteSession(Long sessionId) {
-        requireTransactionResult(transactionTemplate.execute(status -> {
+        transactionTemplate.executeWithoutResult(status -> {
             ChatSession session = requireTenantOwnedSession(sessionId);
             Long targetSessionId = session.getId();
 
@@ -194,8 +195,7 @@ public class ChatApplicationService {
             chatMessageRepository.deleteAllBySession_Id(targetSessionId);
             chatSessionRepository.delete(session);
             chatSessionRepository.flush();
-            return null;
-        }));
+        });
     }
 
     /**
