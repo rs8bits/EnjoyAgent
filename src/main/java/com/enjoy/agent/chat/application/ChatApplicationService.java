@@ -367,7 +367,7 @@ public class ChatApplicationService {
             emitter.complete();
         } catch (RuntimeException ex) {
             sendErrorEventQuietly(emitter, "INTERNAL_SERVER_ERROR", "Unexpected server error");
-            emitter.completeWithError(ex);
+            emitter.complete();
         }
     }
 
@@ -643,7 +643,7 @@ public class ChatApplicationService {
                 officialModelConfig.getModelType(),
                 officialModelConfig.getModelName(),
                 CredentialSource.PLATFORM,
-                officialModelConfig.getOfficialCredential().getId(),
+                null,
                 officialModelConfig.getOfficialCredential().getSecretCiphertext(),
                 officialModelConfig.getTemperature(),
                 officialModelConfig.getMaxTokens(),

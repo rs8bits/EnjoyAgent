@@ -95,7 +95,7 @@ public class AdminBillingApplicationService {
         return walletSupportService.toRechargeOrderResponse(rechargeOrderRepository.save(order));
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public UserWalletResponse getUserWallet(Long userId) {
         requireAdmin();
         return walletSupportService.toWalletResponse(walletSupportService.loadOrCreateWallet(userId));

@@ -4,6 +4,8 @@ spring:
     show-sql: true
 
 enjoy:
+  billing:
+    enabled: true
   model-gateway:
     # 本地开发环境默认走百炼兼容接口，避免每次手动传 base url。
     openai-base-url: https://dashscope.aliyuncs.com/compatible-mode

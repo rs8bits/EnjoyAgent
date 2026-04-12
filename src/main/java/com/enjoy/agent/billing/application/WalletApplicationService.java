@@ -45,7 +45,7 @@ public class WalletApplicationService {
         this.billingProperties = billingProperties;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public UserWalletResponse getCurrentWallet() {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
         return walletSupportService.toWalletResponse(walletSupportService.loadOrCreateWallet(currentUser.userId()));

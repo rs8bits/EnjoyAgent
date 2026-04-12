@@ -28,13 +28,13 @@ public class ModelCallLogService {
         log.setProvider(result.provider());
         log.setModelName(result.modelName());
         log.setCredentialSource(result.credentialSource());
-        log.setCredentialId(result.credentialId());
+        log.setCredentialId(normalizeCredentialId(result.credentialSource(), result.credentialId()));
         log.setStatus(ModelCallStatus.SUCCESS);
         log.setLatencyMs(result.latencyMs());
         log.setPromptTokens(result.promptTokens());
         log.setCompletionTokens(result.completionTokens());
         log.setTotalTokens(result.totalTokens());
-        return modelCallLogRepository.save(log);
+        return modelCallLogRepository.saveAndFlush(log);
     }
 
     /**
@@ -46,13 +46,13 @@ public class ModelCallLogService {
         log.setProvider(completion.provider());
         log.setModelName(completion.modelName());
         log.setCredentialSource(completion.credentialSource());
-        log.setCredentialId(completion.credentialId());
+        log.setCredentialId(normalizeCredentialId(completion.credentialSource(), completion.credentialId()));
         log.setStatus(ModelCallStatus.SUCCESS);
         log.setLatencyMs(completion.latencyMs());
         log.setPromptTokens(completion.promptTokens());
         log.setCompletionTokens(completion.completionTokens());
         log.setTotalTokens(completion.totalTokens());
-        return modelCallLogRepository.save(log);
+        return modelCallLogRepository.saveAndFlush(log);
     }
 
     /**
@@ -64,7 +64,7 @@ public class ModelCallLogService {
         log.setProvider(ex.getProvider());
         log.setModelName(ex.getModelName());
         log.setCredentialSource(ex.getCredentialSource());
-        log.setCredentialId(ex.getCredentialId());
+        log.setCredentialId(normalizeCredentialId(ex.getCredentialSource(), ex.getCredentialId()));
         log.setStatus(ModelCallStatus.FAILED);
         log.setLatencyMs(ex.getLatencyMs());
         log.setErrorCode(ex.getCode());
@@ -93,5 +93,12 @@ public class ModelCallLogService {
             return value;
         }
         return value.substring(0, maxLength);
+    }
+
+    private Long normalizeCredentialId(com.enjoy.agent.modelgateway.domain.enums.CredentialSource credentialSource, Long credentialId) {
+        if (credentialSource == com.enjoy.agent.modelgateway.domain.enums.CredentialSource.PLATFORM) {
+            return null;
+        }
+        return credentialId;
     }
 }

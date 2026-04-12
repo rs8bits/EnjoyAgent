@@ -54,7 +54,7 @@ public class BillingUsageApplicationService {
         this.clock = clock;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public void assertUserCanUseOfficialModel(Long userId, PreparedModelConfig modelConfig) {
         if (!billingProperties.isEnabled() || modelConfig.officialModelConfigId() == null) {
             return;
