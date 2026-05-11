@@ -1,116 +1,63 @@
-# Enjoy Agent
+# EnjoyAgent Backend
 
-Enjoy Agent 是一个以后端为主的多租户 AI Agent 平台项目。它不是单纯的 SDK Demo，也不是只会聊天的玩具项目，而是希望用一套真实可运行的 Spring Boot 代码，把 Agent 平台里几条最关键的能力主线完整串起来：
+![Java 21](https://img.shields.io/badge/Java-21-orange)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3-green)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-blue)
+![MCP](https://img.shields.io/badge/MCP-ready-purple)
+![RAG](https://img.shields.io/badge/RAG-hybrid%20retrieval-brightgreen)
 
-- 用户与租户体系
-- BYOK 与平台官方模型双轨接入
-- 聊天、流式输出与模型调用日志
-- RAG 检索链路
-- MCP 工具集成与 OAuth
-- 用户钱包、充值审核与异步 token 计费
-- 共享市场、审核发布与安装复制
+EnjoyAgent 是一个面向真实业务场景设计的多租户 AI Agent 平台后端。它不只是一个模型 SDK Demo，而是把 Agent 平台里最关键的能力放在同一套可运行的 Spring Boot 工程里：认证、多租户、BYOK、官方模型、RAG、MCP、Workflow、钱包计费、共享市场和管理员审核。
 
-当前项目以后端为主，前端管理后台仍在继续完善。
+如果你正在学习或准备搭建一个类似 Dify、Coze、扣子工作流、企业知识库问答或 Agent Marketplace 的系统，这个仓库可以作为一份比较完整的后端参考。
 
-## 项目介绍
+## 项目亮点
 
-这个项目最适合两类场景：
+- **真实多租户平台骨架**：用户、租户、成员角色、系统管理员、JWT 鉴权和 `/api/admin/**` 权限边界已经串通。
+- **BYOK + 平台官方模型双轨运行**：用户可以接自己的 OpenAI-compatible/百炼模型，平台也可以托管官方模型、价格和凭证。
+- **完整 RAG 主链路**：文档上传、MinIO 存储、切片、embedding、pgvector、Query Rewrite、Rerank、Elasticsearch 混合检索和检索调试信息。
+- **MCP 运行时接入**：支持 MCP Server 管理、工具同步、Agent 工具绑定、工具调用日志、OAuth Auth Code + PKCE、Client Credentials 和 token refresh。
+- **可视化 Workflow 后端能力**：支持工作流、节点、连线持久化，测试运行和执行历史，为可拖拽 Agent Workflow 提供后端编排基础。
+- **钱包与异步 token 计费**：官方模型调用会记录价格快照和 token 快照，通过 RabbitMQ 异步写入钱包流水。
+- **共享市场不是弱引用**：Agent、知识库、MCP Server、Workflow 都可以提交市场，管理员审核后用户安装到自己的租户副本中。
+- **工程化边界清晰**：Flyway 管迁移，应用服务承载业务编排，敏感凭证加密存储，日志和响应结构统一。
 
-- 想系统学习 AI Agent 后端应该怎么设计，而不是只停留在模型 SDK 调用
-- 想自己动手实现一个带多租户、RAG、工具、计费和市场能力的 Agent 平台
+## 产品截图
 
-当前主干已经打通了这条链路：
+这些截图来自 EnjoyAgent 前端，所有核心数据都由本后端 API 驱动。
 
-`认证 -> 凭证 -> 模型 -> Agent -> 聊天 -> RAG -> MCP -> 官方模型 -> 钱包计费 -> 市场安装`
+### 聊天工作台
 
-## 核心亮点
+![EnjoyAgent chat workspace](docs/images/chat-workspace.png)
 
-### 1. RAG 不是独立 Demo，而是接进了真实聊天运行时
+### 可视化工作流
 
-Enjoy Agent 的 RAG 不是“上传文件后做一次检索实验”，而是接到了 Agent 聊天主链里：
+![EnjoyAgent workflow canvas](docs/images/workflow-canvas.png)
+![img.png](img.png)
 
-- 文档上传后进入 MinIO
-- 文本抽取、切片、embedding、pgvector 入库
-- 支持 Query Rewrite
-- 支持 Rerank
-- 支持 PostgreSQL 向量检索
-- 支持 Elasticsearch 混合检索
-- 支持检索调试信息回传，便于排查“为什么命中/为什么没命中”
+### 钱包与充值审核
 
-这让它更像真实业务系统里的 RAG，而不是单独的实验模块。
+![EnjoyAgent wallet center](docs/images/wallet-center.png)
 
-### 2. 计费不是按次拍脑袋扣，而是按 token 异步结算
+## 能力地图
 
-这版计费已经重构成了更接近平台产品的形态：
-
-- 钱包挂在 `user`，而不是挂在 `tenant`
-- 官方模型与用户自带模型分离
-- 管理员维护官方模型、官方 key 和价格
-- 用户充值先创建充值单，再由管理员审核入账
-- 官方模型调用后记录 `billing_usage_event`
-- 通过 RabbitMQ 异步消费计费事件
-- 按输入/输出 token 单价计算费用
-- 写入钱包流水并更新余额
-
-也就是说，这里不是简单的“请求成功就减一个固定值”，而是：
-
-`模型调用日志 -> 价格快照 -> 计费事件 -> RabbitMQ -> 钱包流水`
-
-### 3. 共享市场不是弱引用，而是“可安装包”
-
-市场设计上最重要的取舍是：安装后生成本租户自己的副本，而不是跨租户直接引用源对象。
-
-当前已经支持：
-
-- Agent 提交市场
-- Knowledge Base 提交市场
-- MCP Server 提交市场
-- 管理员审核、通过、驳回、下架
-- 用户安装市场资产到自己的租户
-
-其中 Agent 市场安装已经支持：
-
-- 复制 Agent 配置
-- 打包并复制知识库文档
-- 在目标租户创建新的知识库副本
-- 复制 MCP Server 与 Tool 定义
-- 自动恢复 Agent 的 MCP Tool 绑定
-- 对私密认证型 MCP 返回后续配置提示
-
-这样市场里的 Agent 更接近“可运行模板”，而不是装完还缺一堆依赖的空壳。
-
-### 4. MCP 不是静态表结构，而是完整接进运行时
-
-项目已经支持较完整的 MCP 后端能力：
-
-- MCP Server 注册与启停
-- Tool 目录同步
-- Agent 绑定 Tool
-- 聊天运行时注入 Tool 定义
-- Tool 调用日志
-- OAuth Auth Code + PKCE
-- OAuth Client Credentials
-- Access Token 刷新
-
-这让项目不仅能“记录有哪些工具”，还能够真正把 MCP 工具拉进 Agent 对话链路里。
-
-### 5. 模型网关同时支持 BYOK 和平台官方模型
-
-模型来源在运行时被显式区分成两类：
-
-- `USER`
-- `PLATFORM`
-
-这带来的好处是：
-
-- 用户可以继续使用自己的百炼/OpenAI-compatible key
-- 平台可以提供官方托管模型
-- 日志、计费、权限和市场安装都能稳定判断这次调用到底走的是谁的模型
+```text
+Auth / Tenant
+  -> Credential
+  -> Model Config / Official Model
+  -> Agent
+  -> Chat Runtime
+  -> RAG
+  -> MCP Tools
+  -> Workflow
+  -> Billing
+  -> Marketplace
+  -> Admin Review
+```
 
 ## 技术栈
 
 - Java 21
-- Spring Boot 3
+- Spring Boot 3.3
 - Spring Security + JWT
 - Spring Data JPA
 - PostgreSQL + pgvector
@@ -120,117 +67,160 @@ Enjoy Agent 的 RAG 不是“上传文件后做一次检索实验”，而是接
 - Elasticsearch
 - Spring AI
 - Flyway
+- Swagger / OpenAPI
 
-## 当前后端能力
+## 当前已实现
+
+### 平台与权限
 
 - 用户注册、登录、JWT 鉴权
-- 多租户隔离与管理员系统角色
-- 凭证管理与 AES 加密存储
-- 用户模型配置与官方模型配置
-- Agent 管理、会话管理、消息持久化
-- 普通聊天与 SSE 流式聊天
-- 知识库、文档上传、切片、embedding、检索
-- Query Rewrite、Rerank、混合检索、检索调试信息
-- MCP Server / Tool / OAuth / 运行时调用
-- 用户钱包、充值单、管理员审核入账
-- 官方模型按 token 异步计费
-- 市场提交、审核、安装与复制
+- 多租户隔离
+- 租户成员角色
+- 系统管理员角色
+- 管理端接口权限边界
 
-## 设计取舍
+### 模型与凭证
 
-这个项目有几条很明确的设计取舍：
+- 用户凭证管理
+- AES 加密保存密钥
+- 用户模型配置
+- 官方模型配置
+- 官方模型托管凭证
+- 模型调用日志
 
-- 优先做“真实主链路”，而不是一开始做很重的企业级平台外壳
-- 保留多租户、凭证加密、迁移、日志这些最基本的平台边界
-- 市场安装优先复制副本，不做跨租户共享运行态对象
-- 先把最有学习价值的主链路打通，再做工程化收尾
+### Agent 与聊天
 
-如果你想看“一个 Agent 平台真正难的地方”，这个项目最值得看的通常不是 Controller，而是这些地方：
+- Agent CRUD
+- 会话与消息持久化
+- 普通聊天
+- SSE 流式聊天
+- RAG 上下文注入
+- MCP 工具调用
+- 用户模型与官方模型运行时分流
 
-- 聊天运行时如何接 RAG 和 MCP
-- 用户模型与官方模型如何在同一条链里共存
-- 计费如何从同步扣费演进到异步 token 结算
-- 市场资产如何从“分享对象”演进成“可安装包”
+### 知识库与 RAG
+
+- Knowledge Base / Document / Chunk
+- MinIO 文件存储
+- 文本抽取与切片
+- Embedding 入库
+- pgvector 向量检索
+- Elasticsearch 混合检索
+- Query Rewrite
+- Rerank
+- 检索调试信息
+
+### MCP
+
+- MCP Server 注册、编辑、启停
+- Tool 目录同步
+- Agent Tool 绑定
+- MCP Tool 调用日志
+- OAuth Auth Code + PKCE
+- OAuth Client Credentials
+- Access Token 刷新
+
+### Workflow
+
+- Workflow 列表、创建、更新、删除
+- Canvas 节点和连线保存
+- Start / LLM / Knowledge / Tool / Condition / Loop / End 节点模型
+- 工作流测试运行
+- 执行历史记录
+- 工作流提交共享市场和安装复制
+
+### Billing
+
+- 用户钱包
+- 充值单
+- 管理员审核充值
+- 人工调账
+- 官方模型价格快照
+- RabbitMQ 异步 token 计费
+- 钱包流水
+
+### Marketplace
+
+- 提交 Agent / Knowledge Base / MCP Server / Workflow
+- 管理员审核、驳回、下架
+- 已上架资产列表
+- 市场资产安装
+- Agent 安装时复制知识库和 MCP 依赖
+- Workflow 安装时复制节点、连线，并提示需要重绑定的租户级资源
 
 ## 快速启动
 
-### 1. 启动基础依赖
-
-项目自带的 `compose.yml` 当前包含：
-
-- PostgreSQL
-- Redis
-- MinIO
-- RabbitMQ
-- Elasticsearch：用于混合检索
-
-启动方式：
+### 1. 启动基础设施
 
 ```bash
 docker compose up -d
 ```
 
-启动后常用地址：
+`compose.yml` 会启动：
 
 ```text
-PostgreSQL: localhost:5432
-Redis: localhost:6379
-MinIO API: http://localhost:9000
-MinIO Console: http://localhost:9001
-RabbitMQ: localhost:5672
-RabbitMQ Console: http://localhost:15672
-Elasticsearch: http://localhost:9200
+PostgreSQL      localhost:5432
+Redis           localhost:6379
+MinIO API       http://localhost:9000
+MinIO Console   http://localhost:9001
+RabbitMQ        localhost:5672
+RabbitMQ UI     http://localhost:15672
+Elasticsearch   http://localhost:9200
 ```
 
-如果你希望本地后端也直接联到这些依赖，建议先复制环境变量模板：
+### 2. 准备环境变量
 
 ```bash
 cp .env.example .env
 ```
 
-其中已经补好了：
+默认配置已经适配本地 Docker 依赖。你可以按需修改模型网关、官方模型 key、MinIO、RabbitMQ、Elasticsearch 等配置。
 
-- `RABBITMQ_HOST / RABBITMQ_PORT`
-- `APP_BILLING_ENABLED=true`
-- `APP_KNOWLEDGE_SEARCH_ENABLED=true`
-- `APP_KNOWLEDGE_SEARCH_BASE_URL=http://localhost:9200`
-
-### 2. 启动应用
+### 3. 启动后端
 
 ```bash
 mvn spring-boot:run
 ```
 
-默认端口：
+默认地址：
 
 ```text
-http://localhost:8080
+API      http://localhost:8080
+Swagger  http://localhost:8080/swagger-ui.html
 ```
 
-Swagger：
+## 推荐联调顺序
 
-```text
-http://localhost:8080/swagger-ui.html
-```
+1. 注册用户并登录
+2. 创建凭证
+3. 创建聊天模型和 embedding 模型
+4. 创建知识库并上传文档
+5. 创建 Agent，绑定模型和知识库
+6. 发起聊天，查看 RAG 命中与模型调用日志
+7. 配置 MCP Server，同步工具并绑定 Agent
+8. 创建工作流并测试运行
+9. 提交资产到共享市场
+10. 使用管理员审核市场资产和充值单
 
-说明：
+## 待开发路线图
 
-- `compose.yml` 现在已经覆盖本地联调需要的主要基础设施
-- 应用服务本身仍然建议在本机通过 Maven 启动，调试体验更好
-- 如果你后面希望把后端应用本身也一起放进 `docker compose`，可以继续再补一个 `app` 服务
-
-## 当前状态
-
-从后端视角看，项目已经具备一个相对完整的 MVP/第一版闭环，并且已经跑过一轮真实中间件与真实模型参与的集成联调，核心链路包括：
-
-- BYOK 知识库聊天
-- 官方模型充值审核与异步扣费
-- 市场提交、审核、安装
-- 安装后的 Agent 再次命中打包知识库
-
-因此它现在已经不只是“代码能编译”，而是具备了比较完整的后端业务闭环。
+- **集成测试固化**：把认证、RAG、MCP、Workflow、Billing、Marketplace 主链整理成可重复执行的 smoke tests。
+- **市场版本系统**：支持资产版本、更新说明、安装升级和兼容性提示。
+- **市场安装异步化**：知识库文档复制、索引重建、MCP 安装等长任务改为可追踪任务。
+- **更细权限模型**：从 `USER / ADMIN` 演进到可配置 RBAC，例如审核员、运营、财务、只读管理员。
+- **Workflow Runtime 增强**：节点级重试、运行日志可视化、失败恢复、变量面板、调试断点。
+- **审计与观测**：补充管理员操作审计、模型调用统计、工具调用统计和计费事件追踪。
+- **部署模板**：补 Docker app 服务、生产环境 profile、反向代理和对象存储配置说明。
 
 ## 文档
 
-- [Agent.md](./Agent.md)：项目定位、架构思路、边界与协作原则
-- [Plan.md](./Plan.md)：当前完成情况、阶段计划与下一步建议
+- [Agent.md](./Agent.md)：架构说明、核心设计取舍和协作原则
+- [Plan.md](./Plan.md)：后续路线图和工程化优先级
+
+## 适合谁看
+
+- 想系统学习 Agent 平台后端设计的人
+- 想把 RAG、MCP、Workflow、计费、市场放进一个真实项目里的人
+- 想从 Demo 走向可运营 AI 平台的人
+
+EnjoyAgent 的目标不是把每个功能都做成最复杂，而是把 AI Agent 平台最难串起来的主链路，尽量用清晰、可读、可运行的代码呈现出来。

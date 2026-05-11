@@ -30,6 +30,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.cache.CacheManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @ExtendWith(MockitoExtension.class)
@@ -50,6 +51,9 @@ class ChatSessionMemoryServiceTest {
     @Mock
     private TransactionTemplate transactionTemplate;
 
+    @Mock
+    private CacheManager cacheManager;
+
     private ChatSessionMemoryService chatSessionMemoryService;
 
     @BeforeEach
@@ -59,7 +63,8 @@ class ChatSessionMemoryServiceTest {
                 chatSessionRepository,
                 chatMessageRepository,
                 modelGatewayService,
-                transactionTemplate
+                transactionTemplate,
+                cacheManager
         );
     }
 

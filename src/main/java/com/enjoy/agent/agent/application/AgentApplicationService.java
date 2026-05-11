@@ -15,13 +15,18 @@ import com.enjoy.agent.model.domain.entity.OfficialModelConfig;
 import com.enjoy.agent.model.domain.enums.ModelType;
 import com.enjoy.agent.model.infrastructure.persistence.ModelConfigRepository;
 import com.enjoy.agent.model.infrastructure.persistence.OfficialModelConfigRepository;
+import com.enjoy.agent.shared.config.CacheNames;
 import com.enjoy.agent.shared.exception.ApiException;
+import com.enjoy.agent.workflow.infrastructure.persistence.WorkflowRepository;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
 import com.enjoy.agent.tenant.domain.entity.Tenant;
 import com.enjoy.agent.tenant.domain.enums.TenantStatus;
 import com.enjoy.agent.tenant.infrastructure.persistence.TenantRepository;
-import java.util.List;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,6 +45,7 @@ public class AgentApplicationService {
     private final OfficialModelConfigRepository officialModelConfigRepository;
     private final KnowledgeBaseRepository knowledgeBaseRepository;
     private final AgentMcpToolBindingRepository agentMcpToolBindingRepository;
+    private final WorkflowRepository workflowRepository;
 
     public AgentApplicationService(
             AgentRepository agentRepository,
@@ -47,7 +53,8 @@ public class AgentApplicationService {
             ModelConfigRepository modelConfigRepository,
             OfficialModelConfigRepository officialModelConfigRepository,
             KnowledgeBaseRepository knowledgeBaseRepository,
-            AgentMcpToolBindingRepository agentMcpToolBindingRepository
+            AgentMcpToolBindingRepository agentMcpToolBindingRepository,
+            WorkflowRepository workflowRepository
     ) {
         this.agentRepository = agentRepository;
         this.tenantRepository = tenantRepository;
@@ -55,6 +62,7 @@ public class AgentApplicationService {
         this.officialModelConfigRepository = officialModelConfigRepository;
         this.knowledgeBaseRepository = knowledgeBaseRepository;
         this.agentMcpToolBindingRepository = agentMcpToolBindingRepository;
+        this.workflowRepository = workflowRepository;
     }
 
     /**
@@ -116,17 +124,16 @@ public class AgentApplicationService {
      * 查询当前租户下的全部 Agent。
      */
     @Transactional(readOnly = true)
-    public List<AgentResponse> listAgents() {
+    public Page<AgentResponse> listAgents(Pageable pageable) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        return agentRepository.findAllByTenant_IdOrderByIdDesc(currentUser.tenantId())
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        return agentRepository.findAllByTenant_Id(currentUser.tenantId(), pageable)
+                .map(this::toResponse);
     }
 
     /**
      * 查询当前租户下的单个 Agent。
      */
+    @Cacheable(value = CacheNames.AGENT_CONFIG, key = "#id")
     @Transactional(readOnly = true)
     public AgentResponse getAgent(Long id) {
         return toResponse(requireTenantOwnedAgent(id));
@@ -135,6 +142,7 @@ public class AgentApplicationService {
     /**
      * 更新当前租户下的 Agent。
      */
+    @CacheEvict(value = CacheNames.AGENT_CONFIG, key = "#id")
     @Transactional
     public AgentResponse updateAgent(Long id, UpdateAgentRequest request) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
@@ -179,6 +187,14 @@ public class AgentApplicationService {
         agent.setMemoryStrategy(memoryBinding.strategy());
         agent.setMemoryUpdateMessageThreshold(memoryBinding.updateMessageThreshold());
         agent.setEnabled(request.enabled());
+        if (request.workflowId() != null) {
+            com.enjoy.agent.workflow.domain.entity.Workflow workflow = workflowRepository
+                    .findByIdAndTenant_Id(request.workflowId(), currentUser.tenantId())
+                    .orElseThrow(() -> new ApiException("WORKFLOW_NOT_FOUND", "Workflow not found", HttpStatus.BAD_REQUEST));
+            agent.setWorkflow(workflow);
+        } else {
+            agent.setWorkflow(null);
+        }
 
         Agent savedAgent = agentRepository.saveAndFlush(agent);
         return toResponse(savedAgent);
@@ -187,6 +203,7 @@ public class AgentApplicationService {
     /**
      * 删除当前租户下的 Agent。
      */
+    @CacheEvict(value = CacheNames.AGENT_CONFIG, key = "#id")
     @Transactional
     public void deleteAgent(Long id) {
         agentMcpToolBindingRepository.deleteAllByAgent_Id(id);

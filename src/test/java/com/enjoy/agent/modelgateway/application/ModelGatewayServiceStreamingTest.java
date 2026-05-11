@@ -109,7 +109,8 @@ class ModelGatewayServiceStreamingTest {
                 List.of(),
                 null,
                 null,
-                List.of(new ChatPromptMessage(ChatMessageRole.USER, "你好"))
+                List.of(new ChatPromptMessage(ChatMessageRole.USER, "你好")),
+                null
         );
     }
 

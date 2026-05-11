@@ -5,6 +5,8 @@ import com.enjoy.agent.market.domain.enums.MarketAssetStatus;
 import com.enjoy.agent.market.domain.enums.MarketAssetType;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -24,10 +26,22 @@ public interface MarketAssetRepository extends JpaRepository<MarketAsset, Long> 
     List<MarketAsset> findAllBySubmitterUser_IdOrderByIdDesc(Long userId);
 
     @EntityGraph(attributePaths = {"submitterUser", "reviewedBy"})
+    Page<MarketAsset> findAllBySubmitterUser_Id(Long userId, Pageable pageable);
+
+    @EntityGraph(attributePaths = {"submitterUser", "reviewedBy"})
     List<MarketAsset> findAllByStatusOrderByPublishedAtDescIdDesc(MarketAssetStatus status);
 
     @EntityGraph(attributePaths = {"submitterUser", "reviewedBy"})
+    Page<MarketAsset> findAllByStatus(MarketAssetStatus status, Pageable pageable);
+
+    @EntityGraph(attributePaths = {"submitterUser", "reviewedBy"})
     List<MarketAsset> findAllByStatusAndAssetTypeOrderByPublishedAtDescIdDesc(MarketAssetStatus status, MarketAssetType assetType);
+
+    @EntityGraph(attributePaths = {"submitterUser", "reviewedBy"})
+    Page<MarketAsset> findAllByStatusAndAssetType(MarketAssetStatus status, MarketAssetType assetType, Pageable pageable);
+
+    @EntityGraph(attributePaths = {"submitterUser", "reviewedBy"})
+    Page<MarketAsset> findAllPagedBy(Pageable pageable);
 
     @EntityGraph(attributePaths = {"submitterUser", "reviewedBy"})
     List<MarketAsset> findAllByOrderByIdDesc();
@@ -37,6 +51,9 @@ public interface MarketAssetRepository extends JpaRepository<MarketAsset, Long> 
 
     @EntityGraph(attributePaths = {"submitterUser", "reviewedBy"})
     List<MarketAsset> findAllByAssetTypeOrderByIdDesc(MarketAssetType assetType);
+
+    @EntityGraph(attributePaths = {"submitterUser", "reviewedBy"})
+    Page<MarketAsset> findAllByAssetType(MarketAssetType assetType, Pageable pageable);
 
     @EntityGraph(attributePaths = {"submitterUser", "reviewedBy"})
     List<MarketAsset> findAllByStatusAndAssetTypeOrderByIdDesc(MarketAssetStatus status, MarketAssetType assetType);

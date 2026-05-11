@@ -56,6 +56,15 @@ record McpServerMarketSnapshot(
 ) {
 }
 
+record WorkflowMarketSnapshot(
+        String name,
+        String description,
+        boolean enabled,
+        String nodesJson,
+        String edgesJson
+) {
+}
+
 record McpToolMarketSnapshot(
         String name,
         String description,

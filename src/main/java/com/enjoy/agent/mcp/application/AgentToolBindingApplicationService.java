@@ -12,6 +12,8 @@ import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
 import java.util.ArrayList;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -45,12 +47,10 @@ public class AgentToolBindingApplicationService {
      * 查询某个 Agent 当前绑定的工具列表。
      */
     @Transactional(readOnly = true)
-    public List<AgentToolBindingResponse> listBindings(Long agentId) {
+    public Page<AgentToolBindingResponse> listBindings(Long agentId, Pageable pageable) {
         requireTenantOwnedAgent(agentId);
-        return agentMcpToolBindingRepository.findAllByAgent_IdOrderByIdAsc(agentId)
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        return agentMcpToolBindingRepository.findAllByAgent_Id(agentId, pageable)
+                .map(this::toResponse);
     }
 
     /**

@@ -2,6 +2,7 @@ package com.enjoy.agent.market.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -25,6 +26,13 @@ import com.enjoy.agent.market.api.response.MarketAssetResponse;
 import com.enjoy.agent.market.domain.entity.MarketAsset;
 import com.enjoy.agent.market.domain.entity.MarketAssetInstall;
 import com.enjoy.agent.market.domain.enums.MarketAssetStatus;
+import com.enjoy.agent.workflow.domain.entity.Workflow;
+import com.enjoy.agent.workflow.domain.entity.WorkflowEdge;
+import com.enjoy.agent.workflow.domain.entity.WorkflowNode;
+import com.enjoy.agent.workflow.domain.enums.WorkflowNodeType;
+import com.enjoy.agent.workflow.infrastructure.persistence.WorkflowEdgeRepository;
+import com.enjoy.agent.workflow.infrastructure.persistence.WorkflowNodeRepository;
+import com.enjoy.agent.workflow.infrastructure.persistence.WorkflowRepository;
 import com.enjoy.agent.market.domain.enums.MarketAssetType;
 import com.enjoy.agent.market.infrastructure.persistence.MarketAssetInstallRepository;
 import com.enjoy.agent.market.infrastructure.persistence.MarketAssetRepository;
@@ -46,6 +54,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -90,6 +99,12 @@ class MarketAssetApplicationServiceTest {
     private TenantRepository tenantRepository;
     @Mock
     private AppUserRepository appUserRepository;
+    @Mock
+    private WorkflowRepository workflowRepository;
+    @Mock
+    private WorkflowNodeRepository workflowNodeRepository;
+    @Mock
+    private WorkflowEdgeRepository workflowEdgeRepository;
 
     private MarketAssetApplicationService service;
     private ObjectMapper objectMapper;
@@ -113,6 +128,9 @@ class MarketAssetApplicationServiceTest {
                 minioStorageService,
                 tenantRepository,
                 appUserRepository,
+                workflowRepository,
+                workflowNodeRepository,
+                workflowEdgeRepository,
                 objectMapper,
                 Clock.fixed(Instant.parse("2026-04-09T01:00:00Z"), ZoneOffset.UTC)
         );
@@ -249,6 +267,157 @@ class MarketAssetApplicationServiceTest {
     }
 
     @Test
+    void submitWorkflowAsset_shouldSnapshotEdgesByNodeId() throws Exception {
+        Workflow workflow = sourceWorkflow();
+        AppUser user = currentUserEntity();
+        WorkflowNode startNode = workflowNode(1001L, workflow, "开始", WorkflowNodeType.START, "{}");
+        WorkflowNode llmNode = workflowNode(1002L, workflow, "LLM", WorkflowNodeType.LLM, "{\"modelConfigId\":201}");
+
+        WorkflowEdge edge = new WorkflowEdge();
+        edge.setWorkflow(workflow);
+        edge.setSourceNode(workflowNode(1001L, workflow, "开始引用", WorkflowNodeType.START, "{}"));
+        edge.setTargetNode(workflowNode(1002L, workflow, "LLM 引用", WorkflowNodeType.LLM, "{}"));
+        edge.setSourceHandle("source");
+        edge.setTargetHandle("target");
+
+        when(workflowRepository.findByIdAndTenant_Id(301L, 7L)).thenReturn(Optional.of(workflow));
+        when(workflowNodeRepository.findAllByWorkflow_IdOrderByIdAsc(301L)).thenReturn(List.of(startNode, llmNode));
+        when(workflowEdgeRepository.findAllByWorkflow_Id(301L)).thenReturn(List.of(edge));
+        when(appUserRepository.findById(11L)).thenReturn(Optional.of(user));
+        when(marketAssetRepository.findByAssetTypeAndSourceTenantIdAndSourceEntityId(MarketAssetType.WORKFLOW, 7L, 301L))
+                .thenReturn(Optional.empty());
+        when(marketAssetRepository.save(any(MarketAsset.class))).thenAnswer(invocation -> {
+            MarketAsset asset = invocation.getArgument(0);
+            asset.setId(3L);
+            return asset;
+        });
+
+        MarketAssetResponse response = service.submitWorkflowAsset(
+                301L,
+                new SubmitMarketAssetRequest("可复用工作流", "包含开始、LLM 和连线")
+        );
+
+        assertThat(response.assetType()).isEqualTo("WORKFLOW");
+        ArgumentCaptor<MarketAsset> assetCaptor = ArgumentCaptor.forClass(MarketAsset.class);
+        verify(marketAssetRepository).save(assetCaptor.capture());
+        WorkflowMarketSnapshot snapshot = objectMapper.readValue(
+                assetCaptor.getValue().getSnapshotJson(),
+                WorkflowMarketSnapshot.class
+        );
+        assertThat(snapshot.name()).isEqualTo("客户问答流程");
+        assertThat(objectMapper.readTree(snapshot.nodesJson())).hasSize(2);
+        assertThat(objectMapper.readTree(snapshot.edgesJson()).get(0).path("sourceNodeIndex").asInt()).isZero();
+        assertThat(objectMapper.readTree(snapshot.edgesJson()).get(0).path("targetNodeIndex").asInt()).isEqualTo(1);
+        assertThat(objectMapper.readTree(snapshot.edgesJson()).get(0).path("sourceHandle").asText()).isEqualTo("source");
+    }
+
+    @Test
+    void installWorkflowAsset_shouldCopyCanvasAndRemapTenantDependencies() throws Exception {
+        AppUser user = currentUserEntity();
+        Tenant tenant = activeTenant();
+        String nodesJson = objectMapper.writeValueAsString(List.of(
+                Map.of("name", "开始", "nodeType", "START", "configJson", "{}", "positionX", 0, "positionY", 0),
+                Map.of("name", "知识检索", "nodeType", "KNOWLEDGE", "configJson", "{\"knowledgeBaseId\":9001}", "positionX", 200, "positionY", 0),
+                Map.of("name", "LLM", "nodeType", "LLM", "configJson", "{\"modelConfigId\":9002,\"temperature\":0.2}", "positionX", 400, "positionY", 0),
+                Map.of("name", "工具调用", "nodeType", "TOOL", "configJson", "{\"toolId\":9003,\"toolName\":\"search\"}", "positionX", 600, "positionY", 0),
+                Map.of("name", "结束", "nodeType", "END", "configJson", "{}", "positionX", 800, "positionY", 0)
+        ));
+        String edgesJson = objectMapper.writeValueAsString(List.of(
+                Map.of("sourceNodeIndex", 0, "targetNodeIndex", 1),
+                Map.of("sourceNodeIndex", 1, "targetNodeIndex", 2),
+                Map.of("sourceNodeIndex", 2, "targetNodeIndex", 3),
+                Map.of("sourceNodeIndex", 3, "targetNodeIndex", 4)
+        ));
+        WorkflowMarketSnapshot snapshot = new WorkflowMarketSnapshot(
+                "客户问答流程",
+                "共享流程",
+                true,
+                nodesJson,
+                edgesJson
+        );
+
+        MarketAsset asset = new MarketAsset();
+        asset.setId(4L);
+        asset.setAssetType(MarketAssetType.WORKFLOW);
+        asset.setStatus(MarketAssetStatus.APPROVED);
+        asset.setName("客户问答流程");
+        asset.setSourceTenantId(99L);
+        asset.setSourceEntityId(301L);
+        asset.setSubmitterUser(user);
+        asset.setSnapshotJson(objectMapper.writeValueAsString(snapshot));
+        asset.setInstallCount(0);
+
+        ModelConfig chatModel = new ModelConfig();
+        chatModel.setId(201L);
+        chatModel.setName("聊天模型");
+        chatModel.setModelType(ModelType.CHAT);
+        chatModel.setCredentialSource(ModelCredentialSource.USER);
+        chatModel.setEnabled(true);
+
+        KnowledgeBase targetKnowledgeBase = new KnowledgeBase();
+        targetKnowledgeBase.setId(401L);
+        targetKnowledgeBase.setTenant(tenant);
+        targetKnowledgeBase.setName("目标知识库");
+        targetKnowledgeBase.setEnabled(true);
+
+        when(marketAssetRepository.findById(4L)).thenReturn(Optional.of(asset));
+        when(appUserRepository.findById(11L)).thenReturn(Optional.of(user));
+        when(tenantRepository.findById(7L)).thenReturn(Optional.of(tenant));
+        when(workflowRepository.existsByTenant_IdAndName(7L, "安装后的工作流")).thenReturn(false);
+        when(workflowRepository.saveAndFlush(any(Workflow.class))).thenAnswer(invocation -> {
+            Workflow saved = invocation.getArgument(0);
+            saved.setId(801L);
+            return saved;
+        });
+        when(workflowNodeRepository.save(any(WorkflowNode.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(modelConfigRepository.findByIdAndTenant_Id(201L, 7L)).thenReturn(Optional.of(chatModel));
+        when(knowledgeBaseRepository.findByIdAndTenant_Id(401L, 7L)).thenReturn(Optional.of(targetKnowledgeBase));
+        when(marketAssetRepository.save(any(MarketAsset.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(marketAssetInstallRepository.save(any(MarketAssetInstall.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        MarketAssetInstallResponse response = service.installAsset(
+                4L,
+                new InstallMarketAssetRequest(
+                        "安装后的工作流",
+                        201L,
+                        null,
+                        401L,
+                        null,
+                        null,
+                        null,
+                        true
+                )
+        );
+
+        assertThat(response.assetType()).isEqualTo("WORKFLOW");
+        assertThat(response.installedEntityId()).isEqualTo(801L);
+        assertThat(response.installedName()).isEqualTo("安装后的工作流");
+        assertThat(response.setupRequired()).isTrue();
+        assertThat(response.setupItems()).contains("工作流工具节点需要重新选择当前租户的 MCP 工具，或绑定到拥有同名工具的 Agent。");
+
+        ArgumentCaptor<WorkflowNode> nodeCaptor = ArgumentCaptor.forClass(WorkflowNode.class);
+        verify(workflowNodeRepository, times(5)).save(nodeCaptor.capture());
+        WorkflowNode installedKnowledgeNode = nodeCaptor.getAllValues().stream()
+                .filter(node -> node.getNodeType() == WorkflowNodeType.KNOWLEDGE)
+                .findFirst()
+                .orElseThrow();
+        WorkflowNode installedLlmNode = nodeCaptor.getAllValues().stream()
+                .filter(node -> node.getNodeType() == WorkflowNodeType.LLM)
+                .findFirst()
+                .orElseThrow();
+        WorkflowNode installedToolNode = nodeCaptor.getAllValues().stream()
+                .filter(node -> node.getNodeType() == WorkflowNodeType.TOOL)
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(objectMapper.readTree(installedKnowledgeNode.getConfigJson()).path("knowledgeBaseId").asLong()).isEqualTo(401L);
+        assertThat(objectMapper.readTree(installedLlmNode.getConfigJson()).path("modelConfigId").asLong()).isEqualTo(201L);
+        assertThat(objectMapper.readTree(installedToolNode.getConfigJson()).has("toolId")).isFalse();
+        assertThat(objectMapper.readTree(installedToolNode.getConfigJson()).path("toolName").asText()).isEqualTo("search");
+        verify(workflowEdgeRepository, times(4)).save(any(WorkflowEdge.class));
+    }
+
+    @Test
     void installAgentAsset_shouldCopyPackagedKnowledgeBase() throws Exception {
         AppUser user = currentUserEntity();
         Tenant tenant = activeTenant();
@@ -371,6 +540,28 @@ class MarketAssetApplicationServiceTest {
         agent.setMemoryUpdateMessageThreshold(6);
         agent.setEnabled(true);
         return agent;
+    }
+
+    private Workflow sourceWorkflow() {
+        Workflow workflow = new Workflow();
+        workflow.setId(301L);
+        workflow.setTenant(activeTenant());
+        workflow.setName("客户问答流程");
+        workflow.setDescription("共享流程");
+        workflow.setEnabled(true);
+        return workflow;
+    }
+
+    private WorkflowNode workflowNode(Long id, Workflow workflow, String name, WorkflowNodeType nodeType, String configJson) {
+        WorkflowNode node = new WorkflowNode();
+        node.setId(id);
+        node.setWorkflow(workflow);
+        node.setName(name);
+        node.setNodeType(nodeType);
+        node.setConfigJson(configJson);
+        node.setPositionX(id.intValue());
+        node.setPositionY(id.intValue());
+        return node;
     }
 
     private AppUser currentUserEntity() {

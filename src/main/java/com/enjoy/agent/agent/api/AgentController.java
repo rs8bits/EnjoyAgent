@@ -5,11 +5,12 @@ import com.enjoy.agent.agent.api.request.UpdateAgentRequest;
 import com.enjoy.agent.agent.api.response.AgentResponse;
 import com.enjoy.agent.agent.application.AgentApplicationService;
 import com.enjoy.agent.shared.api.ApiResponse;
+import com.enjoy.agent.shared.api.PagedResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -46,10 +47,10 @@ public class AgentController {
     /**
      * 查询当前租户下的 Agent 列表。
      */
-    @Operation(summary = "Agent 列表", description = "查询当前租户下的全部 Agent")
+    @Operation(summary = "Agent 列表", description = "分页查询当前租户下的 Agent")
     @GetMapping
-    public ApiResponse<List<AgentResponse>> listAgents() {
-        return ApiResponse.success(agentApplicationService.listAgents());
+    public ApiResponse<PagedResponse<AgentResponse>> listAgents(Pageable pageable) {
+        return ApiResponse.success(PagedResponse.of(agentApplicationService.listAgents(pageable)));
     }
 
     /**

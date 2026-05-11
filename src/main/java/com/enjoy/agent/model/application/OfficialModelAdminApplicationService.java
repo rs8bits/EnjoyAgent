@@ -17,7 +17,8 @@ import com.enjoy.agent.shared.crypto.AesCryptoService;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
-import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -58,11 +59,10 @@ public class OfficialModelAdminApplicationService {
     }
 
     @Transactional(readOnly = true)
-    public List<OfficialModelCredentialResponse> listCredentials() {
+    public Page<OfficialModelCredentialResponse> listCredentials(Pageable pageable) {
         requireAdmin();
-        return officialModelCredentialRepository.findAllByOrderByIdDesc().stream()
-                .map(this::toCredentialResponse)
-                .toList();
+        return officialModelCredentialRepository.findAllPagedBy(pageable)
+                .map(this::toCredentialResponse);
     }
 
     @Transactional(readOnly = true)
@@ -125,11 +125,10 @@ public class OfficialModelAdminApplicationService {
     }
 
     @Transactional(readOnly = true)
-    public List<OfficialModelConfigResponse> listConfigs() {
+    public Page<OfficialModelConfigResponse> listConfigs(Pageable pageable) {
         requireAdmin();
-        return officialModelConfigRepository.findAllByOrderByIdDesc().stream()
-                .map(this::toConfigResponse)
-                .toList();
+        return officialModelConfigRepository.findAllPagedBy(pageable)
+                .map(this::toConfigResponse);
     }
 
     @Transactional(readOnly = true)
@@ -172,13 +171,13 @@ public class OfficialModelAdminApplicationService {
     }
 
     @Transactional(readOnly = true)
-    public List<OfficialModelConfigResponse> listEnabledConfigsForUsers(ModelType modelType) {
-        List<OfficialModelConfig> configs = modelType == null
-                ? officialModelConfigRepository.findAllByEnabledTrueOrderByIdDesc()
-                : officialModelConfigRepository.findAllByEnabledTrueAndModelTypeOrderByIdDesc(modelType);
-        return configs.stream()
-                .map(this::toConfigResponse)
-                .toList();
+    public Page<OfficialModelConfigResponse> listEnabledConfigsForUsers(ModelType modelType, Pageable pageable) {
+        if (modelType == null) {
+            return officialModelConfigRepository.findAllByEnabledTrue(pageable)
+                    .map(this::toConfigResponse);
+        }
+        return officialModelConfigRepository.findAllByEnabledTrueAndModelType(modelType, pageable)
+                .map(this::toConfigResponse);
     }
 
     private void requireAdmin() {

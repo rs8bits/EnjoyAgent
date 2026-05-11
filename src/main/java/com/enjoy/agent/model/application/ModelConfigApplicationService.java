@@ -15,7 +15,8 @@ import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
 import com.enjoy.agent.tenant.domain.entity.Tenant;
 import com.enjoy.agent.tenant.infrastructure.persistence.TenantRepository;
-import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -82,12 +83,10 @@ public class ModelConfigApplicationService {
      * 查询当前租户下的全部模型配置。
      */
     @Transactional(readOnly = true)
-    public List<ModelConfigResponse> listModelConfigs() {
+    public Page<ModelConfigResponse> listModelConfigs(Pageable pageable) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        return modelConfigRepository.findAllByTenant_IdOrderByIdDesc(currentUser.tenantId())
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        return modelConfigRepository.findAllByTenant_Id(currentUser.tenantId(), pageable)
+                .map(this::toResponse);
     }
 
     /**

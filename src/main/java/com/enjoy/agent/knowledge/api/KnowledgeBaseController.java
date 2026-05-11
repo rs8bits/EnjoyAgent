@@ -7,6 +7,7 @@ import com.enjoy.agent.knowledge.api.response.KnowledgeDocumentResponse;
 import com.enjoy.agent.knowledge.application.KnowledgeBaseApplicationService;
 import com.enjoy.agent.knowledge.application.KnowledgeDocumentApplicationService;
 import com.enjoy.agent.shared.api.ApiResponse;
+import com.enjoy.agent.shared.api.PagedResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -14,7 +15,7 @@ import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -58,10 +59,10 @@ public class KnowledgeBaseController {
     /**
      * 查询知识库列表。
      */
-    @Operation(summary = "知识库列表", description = "查询当前租户下的知识库列表")
+    @Operation(summary = "知识库列表", description = "分页查询当前租户下的知识库列表")
     @GetMapping
-    public ApiResponse<List<KnowledgeBaseResponse>> listKnowledgeBases() {
-        return ApiResponse.success(knowledgeBaseApplicationService.listKnowledgeBases());
+    public ApiResponse<PagedResponse<KnowledgeBaseResponse>> listKnowledgeBases(Pageable pageable) {
+        return ApiResponse.success(PagedResponse.of(knowledgeBaseApplicationService.listKnowledgeBases(pageable)));
     }
 
     /**
@@ -120,10 +121,10 @@ public class KnowledgeBaseController {
     /**
      * 查询知识库文档列表。
      */
-    @Operation(summary = "文档列表", description = "查询某个知识库下的文档列表")
+    @Operation(summary = "文档列表", description = "分页查询某个知识库下的文档列表")
     @GetMapping("/{id}/documents")
-    public ApiResponse<List<KnowledgeDocumentResponse>> listDocuments(@PathVariable Long id) {
-        return ApiResponse.success(knowledgeDocumentApplicationService.listDocuments(id));
+    public ApiResponse<PagedResponse<KnowledgeDocumentResponse>> listDocuments(@PathVariable Long id, Pageable pageable) {
+        return ApiResponse.success(PagedResponse.of(knowledgeDocumentApplicationService.listDocuments(id, pageable)));
     }
 
     /**

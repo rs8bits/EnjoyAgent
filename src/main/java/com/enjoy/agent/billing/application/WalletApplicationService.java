@@ -13,7 +13,8 @@ import com.enjoy.agent.billing.infrastructure.persistence.UserWalletTransactionR
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
-import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -52,11 +53,10 @@ public class WalletApplicationService {
     }
 
     @Transactional(readOnly = true)
-    public List<UserWalletTransactionResponse> listCurrentUserTransactions() {
+    public Page<UserWalletTransactionResponse> listCurrentUserTransactions(Pageable pageable) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        return userWalletTransactionRepository.findTop100ByUser_IdOrderByIdDesc(currentUser.userId()).stream()
-                .map(walletSupportService::toTransactionResponse)
-                .toList();
+        return userWalletTransactionRepository.findAllByUser_Id(currentUser.userId(), pageable)
+                .map(walletSupportService::toTransactionResponse);
     }
 
     @Transactional
@@ -75,11 +75,10 @@ public class WalletApplicationService {
     }
 
     @Transactional(readOnly = true)
-    public List<RechargeOrderResponse> listCurrentUserRechargeOrders() {
+    public Page<RechargeOrderResponse> listCurrentUserRechargeOrders(Pageable pageable) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        return rechargeOrderRepository.findAllByUser_IdOrderByIdDesc(currentUser.userId()).stream()
-                .map(walletSupportService::toRechargeOrderResponse)
-                .toList();
+        return rechargeOrderRepository.findAllByUser_Id(currentUser.userId(), pageable)
+                .map(walletSupportService::toRechargeOrderResponse);
     }
 
     @Transactional(readOnly = true)

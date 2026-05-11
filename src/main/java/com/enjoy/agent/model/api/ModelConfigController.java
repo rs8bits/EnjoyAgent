@@ -5,11 +5,12 @@ import com.enjoy.agent.model.api.request.UpdateModelConfigRequest;
 import com.enjoy.agent.model.api.response.ModelConfigResponse;
 import com.enjoy.agent.model.application.ModelConfigApplicationService;
 import com.enjoy.agent.shared.api.ApiResponse;
+import com.enjoy.agent.shared.api.PagedResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -46,10 +47,10 @@ public class ModelConfigController {
     /**
      * 查询当前租户的模型配置列表。
      */
-    @Operation(summary = "模型配置列表", description = "查询当前租户下的模型配置")
+    @Operation(summary = "模型配置列表", description = "分页查询当前租户下的模型配置")
     @GetMapping
-    public ApiResponse<List<ModelConfigResponse>> listModelConfigs() {
-        return ApiResponse.success(modelConfigApplicationService.listModelConfigs());
+    public ApiResponse<PagedResponse<ModelConfigResponse>> listModelConfigs(Pageable pageable) {
+        return ApiResponse.success(PagedResponse.of(modelConfigApplicationService.listModelConfigs(pageable)));
     }
 
     /**

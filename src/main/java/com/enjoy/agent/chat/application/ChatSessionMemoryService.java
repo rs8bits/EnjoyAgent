@@ -11,9 +11,12 @@ import com.enjoy.agent.chat.infrastructure.persistence.ChatSessionRepository;
 import com.enjoy.agent.modelgateway.application.ModelGatewayInvocationException;
 import com.enjoy.agent.modelgateway.application.ModelGatewayService;
 import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
+import com.enjoy.agent.shared.config.CacheNames;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
@@ -43,24 +46,28 @@ public class ChatSessionMemoryService {
     private final ChatMessageRepository chatMessageRepository;
     private final ModelGatewayService modelGatewayService;
     private final TransactionTemplate transactionTemplate;
+    private final CacheManager cacheManager;
 
     public ChatSessionMemoryService(
             ChatSessionMemoryRepository chatSessionMemoryRepository,
             ChatSessionRepository chatSessionRepository,
             ChatMessageRepository chatMessageRepository,
             ModelGatewayService modelGatewayService,
-            TransactionTemplate transactionTemplate
+            TransactionTemplate transactionTemplate,
+            CacheManager cacheManager
     ) {
         this.chatSessionMemoryRepository = chatSessionMemoryRepository;
         this.chatSessionRepository = chatSessionRepository;
         this.chatMessageRepository = chatMessageRepository;
         this.modelGatewayService = modelGatewayService;
         this.transactionTemplate = transactionTemplate;
+        this.cacheManager = cacheManager;
     }
 
     /**
      * 读取当前会话已有的长期摘要。
      */
+    @Cacheable(value = CacheNames.SESSION_SUMMARY, key = "#sessionId", unless = "#result == null")
     public String loadSummary(Long tenantId, Long sessionId, MemoryStrategy memoryStrategy) {
         if (memoryStrategy == null) {
             return null;
@@ -157,6 +164,10 @@ public class ChatSessionMemoryService {
             memory.setVersion(memory.getId() == null ? 1 : memory.getVersion() + 1);
             chatSessionMemoryRepository.save(memory);
         });
+        var cache = cacheManager.getCache(CacheNames.SESSION_SUMMARY);
+        if (cache != null) {
+            cache.evict(sessionId);
+        }
     }
 
     private int resolveThreshold(Integer threshold) {

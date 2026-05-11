@@ -2,6 +2,7 @@ package com.enjoy.agent.chat.infrastructure.persistence;
 
 import com.enjoy.agent.chat.domain.entity.ChatMessage;
 import java.util.List;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -14,6 +15,8 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> 
      * 按消息主键升序读取完整聊天记录。
      */
     List<ChatMessage> findAllBySession_IdOrderByIdAsc(Long sessionId);
+
+    Page<ChatMessage> findAllBySession_Id(Long sessionId, Pageable pageable);
 
     /**
      * 按消息主键倒序读取最近 N 条消息，用于构建滑动窗口。

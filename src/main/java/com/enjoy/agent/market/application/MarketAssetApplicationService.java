@@ -46,12 +46,23 @@ import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
 import com.enjoy.agent.tenant.domain.entity.Tenant;
+import com.enjoy.agent.workflow.domain.entity.Workflow;
+import com.enjoy.agent.workflow.domain.entity.WorkflowEdge;
+import com.enjoy.agent.workflow.domain.entity.WorkflowNode;
+import com.enjoy.agent.workflow.domain.enums.WorkflowNodeType;
+import com.enjoy.agent.workflow.infrastructure.persistence.WorkflowEdgeRepository;
+import com.enjoy.agent.workflow.infrastructure.persistence.WorkflowNodeRepository;
+import com.enjoy.agent.workflow.infrastructure.persistence.WorkflowRepository;
 import com.enjoy.agent.tenant.domain.enums.TenantStatus;
 import com.enjoy.agent.tenant.infrastructure.persistence.TenantRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Clock;
 import java.time.Instant;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -84,6 +95,9 @@ public class MarketAssetApplicationService {
     private final MinioStorageService minioStorageService;
     private final TenantRepository tenantRepository;
     private final AppUserRepository appUserRepository;
+    private final WorkflowRepository workflowRepository;
+    private final WorkflowNodeRepository workflowNodeRepository;
+    private final WorkflowEdgeRepository workflowEdgeRepository;
     private final ObjectMapper objectMapper;
     private final Clock clock;
 
@@ -103,6 +117,9 @@ public class MarketAssetApplicationService {
             MinioStorageService minioStorageService,
             TenantRepository tenantRepository,
             AppUserRepository appUserRepository,
+            WorkflowRepository workflowRepository,
+            WorkflowNodeRepository workflowNodeRepository,
+            WorkflowEdgeRepository workflowEdgeRepository,
             ObjectMapper objectMapper,
             Clock clock
     ) {
@@ -121,6 +138,9 @@ public class MarketAssetApplicationService {
         this.minioStorageService = minioStorageService;
         this.tenantRepository = tenantRepository;
         this.appUserRepository = appUserRepository;
+        this.workflowRepository = workflowRepository;
+        this.workflowNodeRepository = workflowNodeRepository;
+        this.workflowEdgeRepository = workflowEdgeRepository;
         this.objectMapper = objectMapper;
         this.clock = clock;
     }
@@ -219,22 +239,65 @@ public class MarketAssetApplicationService {
         );
     }
 
-    @Transactional(readOnly = true)
-    public List<MarketAssetResponse> listCurrentUserSubmissions() {
+    @Transactional
+    public MarketAssetResponse submitWorkflowAsset(Long workflowId, SubmitMarketAssetRequest request) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        return marketAssetRepository.findAllBySubmitterUser_IdOrderByIdDesc(currentUser.userId()).stream()
-                .map(this::toResponse)
-                .toList();
+        Workflow workflow = workflowRepository.findByIdAndTenant_Id(workflowId, currentUser.tenantId())
+                .orElseThrow(() -> new ApiException("WORKFLOW_NOT_FOUND", "Workflow not found", HttpStatus.NOT_FOUND));
+
+        List<WorkflowNode> nodes = workflowNodeRepository.findAllByWorkflow_IdOrderByIdAsc(workflow.getId());
+        List<WorkflowEdge> edges = workflowEdgeRepository.findAllByWorkflow_Id(workflow.getId());
+        Map<Long, Integer> nodeIndexById = new LinkedHashMap<>();
+        for (int i = 0; i < nodes.size(); i++) {
+            nodeIndexById.put(nodes.get(i).getId(), i);
+        }
+
+        String nodesJson;
+        String edgesJson;
+        try {
+            nodesJson = objectMapper.writeValueAsString(nodes.stream()
+                    .map(this::toWorkflowNodeSnapshot)
+                    .toList());
+            List<Map<String, Object>> edgeSnapshots = new ArrayList<>();
+            for (WorkflowEdge edge : edges) {
+                Long sourceNodeId = edge.getSourceNode() == null ? null : edge.getSourceNode().getId();
+                Long targetNodeId = edge.getTargetNode() == null ? null : edge.getTargetNode().getId();
+                Integer sourceNodeIndex = nodeIndexById.get(sourceNodeId);
+                Integer targetNodeIndex = nodeIndexById.get(targetNodeId);
+                if (sourceNodeIndex == null || targetNodeIndex == null) {
+                    throw new ApiException(
+                            "WORKFLOW_EDGE_INVALID",
+                            "Workflow contains an edge that does not point to a saved node",
+                            HttpStatus.BAD_REQUEST
+                    );
+                }
+                edgeSnapshots.add(toWorkflowEdgeSnapshot(edge, sourceNodeIndex, targetNodeIndex));
+            }
+            edgesJson = objectMapper.writeValueAsString(edgeSnapshots);
+        } catch (JsonProcessingException e) {
+            throw new ApiException("SNAPSHOT_SERIALIZATION_FAILED", "Failed to serialize workflow snapshot", HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+
+        WorkflowMarketSnapshot snapshot = new WorkflowMarketSnapshot(
+                workflow.getName(), workflow.getDescription(), workflow.isEnabled(), nodesJson, edgesJson);
+        return upsertAsset(MarketAssetType.WORKFLOW, currentUser, workflow.getId(), workflow.getName(), request, snapshot);
     }
 
     @Transactional(readOnly = true)
-    public List<MarketAssetResponse> listPublishedAssets(MarketAssetType assetType) {
-        List<MarketAsset> assets = assetType == null
-                ? marketAssetRepository.findAllByStatusOrderByPublishedAtDescIdDesc(MarketAssetStatus.APPROVED)
-                : marketAssetRepository.findAllByStatusAndAssetTypeOrderByPublishedAtDescIdDesc(MarketAssetStatus.APPROVED, assetType);
-        return assets.stream()
-                .map(this::toResponse)
-                .toList();
+    public Page<MarketAssetResponse> listCurrentUserSubmissions(Pageable pageable) {
+        AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
+        return marketAssetRepository.findAllBySubmitterUser_Id(currentUser.userId(), pageable)
+                .map(this::toResponse);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<MarketAssetResponse> listPublishedAssets(MarketAssetType assetType, Pageable pageable) {
+        if (assetType == null) {
+            return marketAssetRepository.findAllByStatus(MarketAssetStatus.APPROVED, pageable)
+                    .map(this::toResponse);
+        }
+        return marketAssetRepository.findAllByStatusAndAssetType(MarketAssetStatus.APPROVED, assetType, pageable)
+                .map(this::toResponse);
     }
 
     @Transactional(readOnly = true)
@@ -254,6 +317,7 @@ public class MarketAssetApplicationService {
             case AGENT -> installAgentAsset(asset, currentUser, tenant, request);
             case KNOWLEDGE_BASE -> installKnowledgeBaseAsset(asset, tenant, request);
             case MCP_SERVER -> installMcpServerAsset(asset, currentUser, tenant, request);
+            case WORKFLOW -> installWorkflowAsset(asset, tenant, request);
         };
 
         asset.setInstallCount(asset.getInstallCount() == null ? 1 : asset.getInstallCount() + 1);
@@ -279,21 +343,16 @@ public class MarketAssetApplicationService {
     }
 
     @Transactional(readOnly = true)
-    public List<MarketAssetResponse> listAdminAssets(MarketAssetType assetType, MarketAssetStatus status) {
+    public Page<MarketAssetResponse> listAdminAssets(MarketAssetType assetType, MarketAssetStatus status, Pageable pageable) {
         requireAdmin();
-        List<MarketAsset> assets;
         if (assetType == null && status == null) {
-            assets = marketAssetRepository.findAllByOrderByIdDesc();
+            return marketAssetRepository.findAllPagedBy(pageable).map(this::toResponse);
         } else if (assetType == null) {
-            assets = marketAssetRepository.findAllByStatusOrderByIdDesc(status);
+            return marketAssetRepository.findAllByStatus(status, pageable).map(this::toResponse);
         } else if (status == null) {
-            assets = marketAssetRepository.findAllByAssetTypeOrderByIdDesc(assetType);
-        } else {
-            assets = marketAssetRepository.findAllByStatusAndAssetTypeOrderByIdDesc(status, assetType);
+            return marketAssetRepository.findAllByAssetType(assetType, pageable).map(this::toResponse);
         }
-        return assets.stream()
-                .map(this::toResponse)
-                .toList();
+        return marketAssetRepository.findAllByStatusAndAssetType(status, assetType, pageable).map(this::toResponse);
     }
 
     @Transactional
@@ -466,6 +525,155 @@ public class MarketAssetApplicationService {
                 setupItems
         );
         return new InstallationResult(savedServer.getId(), savedServer.getName(), List.of(), setupItems);
+    }
+
+    private InstallationResult installWorkflowAsset(MarketAsset asset, Tenant tenant, InstallMarketAssetRequest request) {
+        WorkflowMarketSnapshot snapshot = readSnapshot(asset, WorkflowMarketSnapshot.class);
+        String installedName = resolveUniqueName(normalizeInstallName(request.name(), snapshot.name()),
+                name -> workflowRepository.existsByTenant_IdAndName(tenant.getId(), name));
+        boolean sameTenantInstall = Objects.equals(asset.getSourceTenantId(), tenant.getId());
+        List<String> setupItems = new ArrayList<>();
+
+        Workflow newWorkflow = new Workflow();
+        newWorkflow.setTenant(tenant);
+        newWorkflow.setName(installedName);
+        newWorkflow.setDescription(snapshot.description());
+        newWorkflow.setEnabled(request.enabled() == null ? snapshot.enabled() : request.enabled());
+        Workflow savedWorkflow = workflowRepository.saveAndFlush(newWorkflow);
+
+        List<WorkflowNode> savedNodes = new ArrayList<>();
+        try {
+            JsonNode nodesArray = objectMapper.readTree(snapshot.nodesJson());
+            for (JsonNode n : nodesArray) {
+                WorkflowNode node = new WorkflowNode();
+                node.setWorkflow(savedWorkflow);
+                node.setName(n.path("name").asText());
+                node.setNodeType(WorkflowNodeType.valueOf(n.path("nodeType").asText()));
+                node.setConfigJson(installWorkflowNodeConfig(n, request, tenant.getId(), sameTenantInstall, setupItems));
+                node.setPositionX(n.path("positionX").asInt(0));
+                node.setPositionY(n.path("positionY").asInt(0));
+                savedNodes.add(workflowNodeRepository.save(node));
+            }
+            workflowNodeRepository.flush();
+
+            JsonNode edgesArray = objectMapper.readTree(snapshot.edgesJson());
+            for (JsonNode e : edgesArray) {
+                int srcIdx = e.path("sourceNodeIndex").asInt();
+                int tgtIdx = e.path("targetNodeIndex").asInt();
+                if (srcIdx >= 0 && tgtIdx >= 0 && srcIdx < savedNodes.size() && tgtIdx < savedNodes.size()) {
+                    WorkflowEdge edge = new WorkflowEdge();
+                    edge.setWorkflow(savedWorkflow);
+                    edge.setSourceNode(savedNodes.get(srcIdx));
+                    edge.setTargetNode(savedNodes.get(tgtIdx));
+                    edge.setSourceHandle(normalizeSnapshotHandle(e, "sourceHandle"));
+                    edge.setTargetHandle(normalizeSnapshotHandle(e, "targetHandle"));
+                    workflowEdgeRepository.save(edge);
+                }
+            }
+        } catch (JsonProcessingException ex) {
+            throw new ApiException("SNAPSHOT_DESERIALIZATION_FAILED", "Failed to deserialize workflow snapshot", HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+
+        return new InstallationResult(savedWorkflow.getId(), savedWorkflow.getName(), List.of(), setupItems);
+    }
+
+    private Map<String, Object> toWorkflowNodeSnapshot(WorkflowNode node) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("name", node.getName());
+        snapshot.put("nodeType", node.getNodeType().name());
+        snapshot.put("configJson", node.getConfigJson());
+        snapshot.put("positionX", node.getPositionX());
+        snapshot.put("positionY", node.getPositionY());
+        return snapshot;
+    }
+
+    private Map<String, Object> toWorkflowEdgeSnapshot(WorkflowEdge edge, Integer sourceNodeIndex, Integer targetNodeIndex) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("sourceNodeIndex", sourceNodeIndex);
+        snapshot.put("targetNodeIndex", targetNodeIndex);
+        snapshot.put("sourceHandle", edge.getSourceHandle());
+        snapshot.put("targetHandle", edge.getTargetHandle());
+        return snapshot;
+    }
+
+    private String installWorkflowNodeConfig(
+            JsonNode nodeSnapshot,
+            InstallMarketAssetRequest request,
+            Long tenantId,
+            boolean sameTenantInstall,
+            List<String> setupItems
+    ) {
+        String nodeType = nodeSnapshot.path("nodeType").asText("");
+        ObjectNode config = readWorkflowNodeConfig(nodeSnapshot.path("configJson").asText("{}"));
+
+        if ("LLM".equals(nodeType)) {
+            if (request.targetModelConfigId() != null) {
+                requireEnabledTenantModelConfig(tenantId, request.targetModelConfigId(), ModelType.CHAT);
+                config.put("modelConfigId", request.targetModelConfigId());
+            } else if (!sameTenantInstall && config.hasNonNull("modelConfigId")) {
+                config.remove("modelConfigId");
+                addSetupItemOnce(
+                        setupItems,
+                        "工作流 LLM 节点已改为使用运行时选择的聊天模型；如需固定模型，请在节点配置里重新选择。"
+                );
+            }
+        }
+
+        if ("KNOWLEDGE".equals(nodeType)) {
+            if (request.targetKnowledgeBaseId() != null) {
+                requireTenantKnowledgeBase(tenantId, request.targetKnowledgeBaseId());
+                config.put("knowledgeBaseId", request.targetKnowledgeBaseId());
+            } else if (!sameTenantInstall && config.hasNonNull("knowledgeBaseId")) {
+                config.remove("knowledgeBaseId");
+                addSetupItemOnce(
+                        setupItems,
+                        "工作流知识检索节点需要重新选择当前租户的知识库后才能运行。"
+                );
+            }
+        }
+
+        if ("TOOL".equals(nodeType) && !sameTenantInstall && config.hasNonNull("toolId")) {
+            config.remove("toolId");
+            addSetupItemOnce(
+                    setupItems,
+                    "工作流工具节点需要重新选择当前租户的 MCP 工具，或绑定到拥有同名工具的 Agent。"
+            );
+        }
+
+        try {
+            return objectMapper.writeValueAsString(config);
+        } catch (JsonProcessingException ex) {
+            throw new ApiException("WORKFLOW_NODE_CONFIG_INVALID", "Workflow node config is invalid", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    private ObjectNode readWorkflowNodeConfig(String configJson) {
+        if (!StringUtils.hasText(configJson)) {
+            return objectMapper.createObjectNode();
+        }
+        try {
+            JsonNode parsed = objectMapper.readTree(configJson);
+            if (parsed == null || parsed.isNull()) {
+                return objectMapper.createObjectNode();
+            }
+            if (!parsed.isObject()) {
+                throw new ApiException("WORKFLOW_NODE_CONFIG_INVALID", "Workflow node config must be a JSON object", HttpStatus.BAD_REQUEST);
+            }
+            return (ObjectNode) parsed;
+        } catch (JsonProcessingException ex) {
+            throw new ApiException("WORKFLOW_NODE_CONFIG_INVALID", "Workflow node config is invalid", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    private String normalizeSnapshotHandle(JsonNode edgeSnapshot, String fieldName) {
+        String value = edgeSnapshot.path(fieldName).asText(null);
+        return StringUtils.hasText(value) ? value : null;
+    }
+
+    private void addSetupItemOnce(List<String> setupItems, String setupItem) {
+        if (!setupItems.contains(setupItem)) {
+            setupItems.add(setupItem);
+        }
     }
 
     private KnowledgeBaseMarketSnapshot buildKnowledgeBaseSnapshot(KnowledgeBase knowledgeBase, String storageScope) {

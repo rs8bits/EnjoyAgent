@@ -14,6 +14,8 @@ import com.enjoy.agent.shared.security.CurrentUserContext;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -172,12 +174,10 @@ public class KnowledgeDocumentApplicationService {
     /**
      * 查询知识库文档列表。
      */
-    public List<KnowledgeDocumentResponse> listDocuments(Long knowledgeBaseId) {
+    public Page<KnowledgeDocumentResponse> listDocuments(Long knowledgeBaseId, Pageable pageable) {
         knowledgeBaseApplicationService.requireRunnableKnowledgeBase(knowledgeBaseId);
-        return knowledgeDocumentRepository.findAllByKnowledgeBase_IdOrderByIdDesc(knowledgeBaseId)
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        return knowledgeDocumentRepository.findAllByKnowledgeBase_Id(knowledgeBaseId, pageable)
+                .map(this::toResponse);
     }
 
     /**

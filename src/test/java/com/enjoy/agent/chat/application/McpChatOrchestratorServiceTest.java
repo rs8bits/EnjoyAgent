@@ -180,7 +180,8 @@ class McpChatOrchestratorServiceTest {
                 )),
                 null,
                 null,
-                List.of(new ChatPromptMessage(ChatMessageRole.USER, "hello"))
+                List.of(new ChatPromptMessage(ChatMessageRole.USER, "hello")),
+                null
         );
     }
 }

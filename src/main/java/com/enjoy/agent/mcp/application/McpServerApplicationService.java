@@ -19,7 +19,8 @@ import com.enjoy.agent.shared.security.CurrentUserContext;
 import com.enjoy.agent.tenant.domain.entity.Tenant;
 import com.enjoy.agent.tenant.domain.enums.TenantStatus;
 import com.enjoy.agent.tenant.infrastructure.persistence.TenantRepository;
-import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -83,12 +84,10 @@ public class McpServerApplicationService {
      * 查询当前租户下的 MCP Server 列表。
      */
     @Transactional(readOnly = true)
-    public List<McpServerResponse> listServers() {
+    public Page<McpServerResponse> listServers(Pageable pageable) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        return mcpServerRepository.findAllByTenant_IdOrderByIdDesc(currentUser.tenantId())
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        return mcpServerRepository.findAllByTenant_Id(currentUser.tenantId(), pageable)
+                .map(this::toResponse);
     }
 
     /**

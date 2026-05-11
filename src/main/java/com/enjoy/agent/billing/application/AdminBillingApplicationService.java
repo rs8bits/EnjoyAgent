@@ -20,7 +20,8 @@ import com.enjoy.agent.shared.security.CurrentUserContext;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
-import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -50,14 +51,14 @@ public class AdminBillingApplicationService {
     }
 
     @Transactional(readOnly = true)
-    public List<RechargeOrderResponse> listRechargeOrders(RechargeOrderStatus status) {
+    public Page<RechargeOrderResponse> listRechargeOrders(RechargeOrderStatus status, Pageable pageable) {
         requireAdmin();
-        List<RechargeOrder> orders = status == null
-                ? rechargeOrderRepository.findAllByOrderByIdDesc()
-                : rechargeOrderRepository.findAllByStatusOrderByIdDesc(status);
-        return orders.stream()
-                .map(walletSupportService::toRechargeOrderResponse)
-                .toList();
+        if (status == null) {
+            return rechargeOrderRepository.findAllPagedBy(pageable)
+                    .map(walletSupportService::toRechargeOrderResponse);
+        }
+        return rechargeOrderRepository.findAllByStatus(status, pageable)
+                .map(walletSupportService::toRechargeOrderResponse);
     }
 
     @Transactional

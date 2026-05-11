@@ -9,11 +9,13 @@ import com.enjoy.agent.mcp.application.McpRuntimeService;
 import com.enjoy.agent.mcp.application.McpServerApplicationService;
 import com.enjoy.agent.mcp.application.McpToolApplicationService;
 import com.enjoy.agent.shared.api.ApiResponse;
+import com.enjoy.agent.shared.api.PagedResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -52,10 +54,10 @@ public class McpServerController {
         return ApiResponse.success(mcpServerApplicationService.createServer(request), "MCP server created");
     }
 
-    @Operation(summary = "MCP Server 列表", description = "查询当前租户下的全部 MCP Server")
+    @Operation(summary = "MCP Server 列表", description = "分页查询当前租户下的 MCP Server")
     @GetMapping
-    public ApiResponse<List<McpServerResponse>> listServers() {
-        return ApiResponse.success(mcpServerApplicationService.listServers());
+    public ApiResponse<PagedResponse<McpServerResponse>> listServers(Pageable pageable) {
+        return ApiResponse.success(PagedResponse.of(mcpServerApplicationService.listServers(pageable)));
     }
 
     @Operation(summary = "MCP Server 详情", description = "查询当前租户下某个 MCP Server 的详情")

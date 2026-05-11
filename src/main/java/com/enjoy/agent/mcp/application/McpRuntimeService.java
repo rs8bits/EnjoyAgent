@@ -52,7 +52,7 @@ public class McpRuntimeService {
     /**
      * 为聊天运行时提供 Agent 当前可调用的工具快照。
      */
-    @Transactional
+    @Transactional(readOnly = true)
     public List<PreparedMcpTool> listRunnableToolsForAgent(Long agentId) {
         LinkedHashMap<Long, PreparedMcpServer> preparedServers = new LinkedHashMap<>();
         List<AgentMcpToolBinding> bindings = agentMcpToolBindingRepository.findAllByAgent_IdOrderByIdAsc(agentId);
@@ -63,6 +63,18 @@ public class McpRuntimeService {
                 .filter(tool -> tool.getServer().isEnabled())
                 .map(tool -> toPreparedTool(tool, preparedServers))
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public PreparedMcpTool getRunnableToolForTenant(Long tenantId, Long toolId) {
+        McpTool tool = mcpToolApplicationService.requireTenantOwnedTool(tenantId, toolId);
+        if (!tool.isEnabled() || !tool.getServer().isEnabled()) {
+            throw new ApiException("MCP_TOOL_NOT_RUNNABLE", "Selected MCP tool is disabled", HttpStatus.BAD_REQUEST);
+        }
+        if (!tool.getTenant().getId().equals(tenantId)) {
+            throw new ApiException("MCP_TOOL_NOT_FOUND", "MCP tool not found", HttpStatus.NOT_FOUND);
+        }
+        return toPreparedTool(tool, new LinkedHashMap<>());
     }
 
     /**

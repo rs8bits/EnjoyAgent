@@ -70,7 +70,7 @@ public class ModelGatewayService {
                 .stream()
                 .map(this::toConversationMessage)
                 .toList();
-        ModelGatewayChatCompletion completion = generateChatCompletion(
+        ModelGatewayChatCompletion completion = generateChatCompletionInternal(
                 preparedChatTurn.modelConfig(),
                 preparedChatTurn.systemPrompt(),
                 preparedChatTurn.sessionMemory() == null ? null : preparedChatTurn.sessionMemory().summary(),
@@ -102,7 +102,7 @@ public class ModelGatewayService {
             String systemPrompt,
             String userPrompt
     ) {
-        ModelGatewayChatCompletion completion = generateChatCompletion(
+        ModelGatewayChatCompletion completion = generateChatCompletionInternal(
                 modelConfig,
                 systemPrompt,
                 null,
@@ -161,7 +161,7 @@ public class ModelGatewayService {
             List<ModelGatewayConversationMessage> conversationMessages,
             List<ModelGatewayToolDefinition> tools
     ) {
-        return generateChatCompletion(
+        return generateChatCompletionInternal(
                 preparedChatTurn.modelConfig(),
                 preparedChatTurn.systemPrompt(),
                 preparedChatTurn.sessionMemory() == null ? null : preparedChatTurn.sessionMemory().summary(),
@@ -171,7 +171,37 @@ public class ModelGatewayService {
         );
     }
 
-    private ModelGatewayChatCompletion generateChatCompletion(
+    /**
+     * 以独立参数调用聊天补全，供工作流节点直接使用。
+     */
+    public ModelGatewayChatCompletion generateChatCompletion(
+            PreparedModelConfig modelConfig,
+            String systemPrompt,
+            List<ModelGatewayConversationMessage> conversationMessages,
+            List<ModelGatewayToolDefinition> tools
+    ) {
+        return generateChatCompletionInternal(modelConfig, systemPrompt, null, null, conversationMessages, tools);
+    }
+
+    public ModelGatewayChatCompletion generateChatCompletion(
+            PreparedModelConfig modelConfig,
+            String systemPrompt,
+            String sessionMemorySummary,
+            String retrievalContext,
+            List<ModelGatewayConversationMessage> conversationMessages,
+            List<ModelGatewayToolDefinition> tools
+    ) {
+        return generateChatCompletionInternal(
+                modelConfig,
+                systemPrompt,
+                sessionMemorySummary,
+                retrievalContext,
+                conversationMessages,
+                tools
+        );
+    }
+
+    private ModelGatewayChatCompletion generateChatCompletionInternal(
             PreparedModelConfig modelConfig,
             String systemPrompt,
             String sessionMemorySummary,

@@ -23,6 +23,7 @@ import com.enjoy.agent.model.domain.enums.ModelType;
 import com.enjoy.agent.model.infrastructure.persistence.ModelConfigRepository;
 import com.enjoy.agent.model.infrastructure.persistence.OfficialModelConfigRepository;
 import com.enjoy.agent.shared.exception.ApiException;
+import com.enjoy.agent.workflow.infrastructure.persistence.WorkflowRepository;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.tenant.domain.entity.Tenant;
 import com.enjoy.agent.tenant.domain.enums.TenantMemberRole;
@@ -60,6 +61,9 @@ class AgentApplicationServiceTest {
     @Mock
     private AgentMcpToolBindingRepository agentMcpToolBindingRepository;
 
+    @Mock
+    private WorkflowRepository workflowRepository;
+
     private AgentApplicationService agentApplicationService;
 
     @BeforeEach
@@ -70,7 +74,8 @@ class AgentApplicationServiceTest {
                 modelConfigRepository,
                 officialModelConfigRepository,
                 knowledgeBaseRepository,
-                agentMcpToolBindingRepository
+                agentMcpToolBindingRepository,
+                workflowRepository
         );
         AuthenticatedUser currentUser = new AuthenticatedUser(
                 11L,

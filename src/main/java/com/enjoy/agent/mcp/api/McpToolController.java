@@ -3,11 +3,12 @@ package com.enjoy.agent.mcp.api;
 import com.enjoy.agent.mcp.api.response.McpToolResponse;
 import com.enjoy.agent.mcp.application.McpToolApplicationService;
 import com.enjoy.agent.shared.api.ApiResponse;
+import com.enjoy.agent.shared.api.PagedResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -29,13 +30,14 @@ public class McpToolController {
         this.mcpToolApplicationService = mcpToolApplicationService;
     }
 
-    @Operation(summary = "MCP Tool 列表", description = "查询当前租户下的 MCP Tool 列表，可按 Server 过滤")
+    @Operation(summary = "MCP Tool 列表", description = "分页查询当前租户下的 MCP Tool 列表，可按 Server 过滤")
     @GetMapping
-    public ApiResponse<List<McpToolResponse>> listTools(
+    public ApiResponse<PagedResponse<McpToolResponse>> listTools(
             @Parameter(description = "按 MCP Server 过滤，可选")
-            @RequestParam(required = false) Long serverId
+            @RequestParam(required = false) Long serverId,
+            Pageable pageable
     ) {
-        return ApiResponse.success(mcpToolApplicationService.listTools(serverId));
+        return ApiResponse.success(PagedResponse.of(mcpToolApplicationService.listTools(serverId, pageable)));
     }
 
     @Operation(summary = "MCP Tool 详情", description = "查询当前租户下某个 MCP Tool 的详情")

@@ -15,7 +15,8 @@ import com.enjoy.agent.shared.crypto.CredentialMaskingUtils;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
-import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -77,12 +78,10 @@ public class CredentialApplicationService {
      * 查询当前用户的全部凭证。
      */
     @Transactional(readOnly = true)
-    public List<CredentialResponse> listCredentials() {
+    public Page<CredentialResponse> listCredentials(Pageable pageable) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        return credentialRepository.findAllByUser_IdOrderByIdDesc(currentUser.userId())
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        return credentialRepository.findAllByUser_Id(currentUser.userId(), pageable)
+                .map(this::toResponse);
     }
 
     /**

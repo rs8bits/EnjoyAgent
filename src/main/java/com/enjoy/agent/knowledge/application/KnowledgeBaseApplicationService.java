@@ -18,7 +18,8 @@ import com.enjoy.agent.shared.security.CurrentUserContext;
 import com.enjoy.agent.tenant.domain.entity.Tenant;
 import com.enjoy.agent.tenant.domain.enums.TenantStatus;
 import com.enjoy.agent.tenant.infrastructure.persistence.TenantRepository;
-import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -76,12 +77,10 @@ public class KnowledgeBaseApplicationService {
      * 查询当前租户下的知识库列表。
      */
     @Transactional(readOnly = true)
-    public List<KnowledgeBaseResponse> listKnowledgeBases() {
+    public Page<KnowledgeBaseResponse> listKnowledgeBases(Pageable pageable) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        return knowledgeBaseRepository.findAllByTenant_IdOrderByIdDesc(currentUser.tenantId())
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        return knowledgeBaseRepository.findAllByTenant_Id(currentUser.tenantId(), pageable)
+                .map(this::toResponse);
     }
 
     /**
@@ -133,7 +132,17 @@ public class KnowledgeBaseApplicationService {
      */
     @Transactional(readOnly = true)
     public KnowledgeBase requireRunnableKnowledgeBase(Long knowledgeBaseId) {
-        KnowledgeBase knowledgeBase = requireTenantOwnedKnowledgeBase(knowledgeBaseId);
+        AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
+        return requireRunnableKnowledgeBase(currentUser.tenantId(), knowledgeBaseId);
+    }
+
+    /**
+     * 为异步运行时提供指定租户下的知识库实体校验，避免依赖线程本地登录上下文。
+     */
+    @Transactional(readOnly = true)
+    public KnowledgeBase requireRunnableKnowledgeBase(Long tenantId, Long knowledgeBaseId) {
+        KnowledgeBase knowledgeBase = knowledgeBaseRepository.findByIdAndTenant_Id(knowledgeBaseId, tenantId)
+                .orElseThrow(() -> new ApiException("KNOWLEDGE_BASE_NOT_FOUND", "Knowledge base not found", HttpStatus.NOT_FOUND));
         if (!knowledgeBase.isEnabled()) {
             throw new ApiException("KNOWLEDGE_BASE_DISABLED", "Knowledge base is disabled", HttpStatus.BAD_REQUEST);
         }

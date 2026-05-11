@@ -4,11 +4,13 @@ import com.enjoy.agent.mcp.api.request.ReplaceAgentToolBindingsRequest;
 import com.enjoy.agent.mcp.api.response.AgentToolBindingResponse;
 import com.enjoy.agent.mcp.application.AgentToolBindingApplicationService;
 import com.enjoy.agent.shared.api.ApiResponse;
+import com.enjoy.agent.shared.api.PagedResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -31,10 +33,10 @@ public class AgentToolBindingController {
         this.agentToolBindingApplicationService = agentToolBindingApplicationService;
     }
 
-    @Operation(summary = "Agent 工具绑定列表", description = "查询某个 Agent 当前绑定的全部 MCP Tool")
+    @Operation(summary = "Agent 工具绑定列表", description = "分页查询某个 Agent 当前绑定的 MCP Tool")
     @GetMapping
-    public ApiResponse<List<AgentToolBindingResponse>> listBindings(@PathVariable Long agentId) {
-        return ApiResponse.success(agentToolBindingApplicationService.listBindings(agentId));
+    public ApiResponse<PagedResponse<AgentToolBindingResponse>> listBindings(@PathVariable Long agentId, Pageable pageable) {
+        return ApiResponse.success(PagedResponse.of(agentToolBindingApplicationService.listBindings(agentId, pageable)));
     }
 
     @Operation(summary = "替换 Agent 工具绑定", description = "用一组 MCP Tool ID 替换某个 Agent 当前绑定的全部工具")

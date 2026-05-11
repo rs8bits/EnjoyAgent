@@ -7,12 +7,13 @@ import com.enjoy.agent.chat.api.response.ChatSessionResponse;
 import com.enjoy.agent.chat.api.response.ChatTurnResponse;
 import com.enjoy.agent.chat.application.ChatApplicationService;
 import com.enjoy.agent.shared.api.ApiResponse;
+import com.enjoy.agent.shared.api.PagedResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -51,13 +52,14 @@ public class ChatController {
     /**
      * 查询聊天会话列表。
      */
-    @Operation(summary = "会话列表", description = "查询当前租户下的聊天会话列表，可按 Agent 过滤")
+    @Operation(summary = "会话列表", description = "分页查询当前租户下的聊天会话列表，可按 Agent 过滤")
     @GetMapping("/sessions")
-    public ApiResponse<List<ChatSessionResponse>> listSessions(
+    public ApiResponse<PagedResponse<ChatSessionResponse>> listSessions(
             @Parameter(description = "按 Agent 过滤，可选")
-            @RequestParam(required = false) Long agentId
+            @RequestParam(required = false) Long agentId,
+            Pageable pageable
     ) {
-        return ApiResponse.success(chatApplicationService.listSessions(agentId));
+        return ApiResponse.success(PagedResponse.of(chatApplicationService.listSessions(agentId, pageable)));
     }
 
     /**
@@ -82,10 +84,10 @@ public class ChatController {
     /**
      * 查询会话消息列表。
      */
-    @Operation(summary = "消息列表", description = "查询某个会话的完整消息历史")
+    @Operation(summary = "消息列表", description = "分页查询某个会话的消息历史")
     @GetMapping("/sessions/{id}/messages")
-    public ApiResponse<List<ChatMessageResponse>> listMessages(@PathVariable Long id) {
-        return ApiResponse.success(chatApplicationService.listMessages(id));
+    public ApiResponse<PagedResponse<ChatMessageResponse>> listMessages(@PathVariable Long id, Pageable pageable) {
+        return ApiResponse.success(PagedResponse.of(chatApplicationService.listMessages(id, pageable)));
     }
 
     /**

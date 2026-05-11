@@ -3,6 +3,8 @@ package com.enjoy.agent.chat.infrastructure.persistence;
 import com.enjoy.agent.chat.domain.entity.ChatSession;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -17,11 +19,17 @@ public interface ChatSessionRepository extends JpaRepository<ChatSession, Long> 
     @EntityGraph(attributePaths = {"tenant", "agent", "createdBy"})
     List<ChatSession> findAllByTenant_IdOrderByUpdatedAtDesc(Long tenantId);
 
+    @EntityGraph(attributePaths = {"tenant", "agent", "createdBy"})
+    Page<ChatSession> findAllByTenant_Id(Long tenantId, Pageable pageable);
+
     /**
      * 按 Agent 过滤当前租户下的会话列表。
      */
     @EntityGraph(attributePaths = {"tenant", "agent", "createdBy"})
     List<ChatSession> findAllByTenant_IdAndAgent_IdOrderByUpdatedAtDesc(Long tenantId, Long agentId);
+
+    @EntityGraph(attributePaths = {"tenant", "agent", "createdBy"})
+    Page<ChatSession> findAllByTenant_IdAndAgent_Id(Long tenantId, Long agentId, Pageable pageable);
 
     /**
      * 查询当前租户下的单个会话，并预加载运行时需要的 Agent、模型和凭证。

@@ -5,11 +5,12 @@ import com.enjoy.agent.credential.api.request.UpdateCredentialRequest;
 import com.enjoy.agent.credential.api.response.CredentialResponse;
 import com.enjoy.agent.credential.application.CredentialApplicationService;
 import com.enjoy.agent.shared.api.ApiResponse;
+import com.enjoy.agent.shared.api.PagedResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -46,10 +47,10 @@ public class CredentialController {
     /**
      * 返回当前用户的凭证列表。
      */
-    @Operation(summary = "凭证列表", description = "查询当前用户自己创建的凭证")
+    @Operation(summary = "凭证列表", description = "分页查询当前用户自己创建的凭证")
     @GetMapping
-    public ApiResponse<List<CredentialResponse>> listCredentials() {
-        return ApiResponse.success(credentialApplicationService.listCredentials());
+    public ApiResponse<PagedResponse<CredentialResponse>> listCredentials(Pageable pageable) {
+        return ApiResponse.success(PagedResponse.of(credentialApplicationService.listCredentials(pageable)));
     }
 
     /**

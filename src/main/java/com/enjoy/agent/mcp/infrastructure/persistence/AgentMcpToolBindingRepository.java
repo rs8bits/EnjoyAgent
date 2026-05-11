@@ -3,6 +3,8 @@ package com.enjoy.agent.mcp.infrastructure.persistence;
 import com.enjoy.agent.mcp.domain.entity.AgentMcpToolBinding;
 import java.util.Collection;
 import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -13,6 +15,9 @@ public interface AgentMcpToolBindingRepository extends JpaRepository<AgentMcpToo
 
     @EntityGraph(attributePaths = {"tenant", "agent", "tool", "tool.server", "tool.server.credential"})
     List<AgentMcpToolBinding> findAllByAgent_IdOrderByIdAsc(Long agentId);
+
+    @EntityGraph(attributePaths = {"tenant", "agent", "tool", "tool.server", "tool.server.credential"})
+    Page<AgentMcpToolBinding> findAllByAgent_Id(Long agentId, Pageable pageable);
 
     void deleteAllByAgent_Id(Long agentId);
 

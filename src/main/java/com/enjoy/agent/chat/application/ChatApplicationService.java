@@ -45,7 +45,9 @@ import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
 import com.enjoy.agent.modelgateway.domain.enums.CredentialSource;
 import com.enjoy.agent.modelgateway.infrastructure.persistence.ModelCallLogRepository;
 import com.enjoy.agent.mcp.infrastructure.persistence.McpToolCallLogRepository;
+import com.enjoy.agent.shared.config.CacheNames;
 import com.enjoy.agent.shared.exception.ApiException;
+import com.enjoy.agent.workflow.application.WorkflowOrchestratorService;
 import com.enjoy.agent.shared.exception.ApiError;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
@@ -56,6 +58,9 @@ import java.io.IOException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import org.springframework.cache.CacheManager;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import java.util.Objects;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
@@ -89,6 +94,8 @@ public class ChatApplicationService {
     private final BillingUsageEventRepository billingUsageEventRepository;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
+    private final CacheManager cacheManager;
+    private final WorkflowOrchestratorService workflowOrchestratorService;
 
     public ChatApplicationService(
             ChatSessionRepository chatSessionRepository,
@@ -110,7 +117,9 @@ public class ChatApplicationService {
             BillingUsageApplicationService billingUsageApplicationService,
             BillingUsageEventRepository billingUsageEventRepository,
             TransactionTemplate transactionTemplate,
-            Clock clock
+            Clock clock,
+            CacheManager cacheManager,
+            WorkflowOrchestratorService workflowOrchestratorService
     ) {
         this.chatSessionRepository = chatSessionRepository;
         this.chatMessageRepository = chatMessageRepository;
@@ -132,6 +141,8 @@ public class ChatApplicationService {
         this.billingUsageEventRepository = billingUsageEventRepository;
         this.transactionTemplate = transactionTemplate;
         this.clock = clock;
+        this.cacheManager = cacheManager;
+        this.workflowOrchestratorService = workflowOrchestratorService;
     }
 
     /**
@@ -162,15 +173,14 @@ public class ChatApplicationService {
     /**
      * 查询当前租户下的会话列表。
      */
-    public List<ChatSessionResponse> listSessions(Long agentId) {
+    public Page<ChatSessionResponse> listSessions(Long agentId, Pageable pageable) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        List<ChatSession> sessions = agentId == null
-                ? chatSessionRepository.findAllByTenant_IdOrderByUpdatedAtDesc(currentUser.tenantId())
-                : chatSessionRepository.findAllByTenant_IdAndAgent_IdOrderByUpdatedAtDesc(currentUser.tenantId(), agentId);
-
-        return sessions.stream()
-                .map(this::toSessionResponse)
-                .toList();
+        if (agentId == null) {
+            return chatSessionRepository.findAllByTenant_Id(currentUser.tenantId(), pageable)
+                    .map(this::toSessionResponse);
+        }
+        return chatSessionRepository.findAllByTenant_IdAndAgent_Id(currentUser.tenantId(), agentId, pageable)
+                .map(this::toSessionResponse);
     }
 
     /**
@@ -196,17 +206,16 @@ public class ChatApplicationService {
             chatSessionRepository.delete(session);
             chatSessionRepository.flush();
         });
+        evictSlidingWindowCache(sessionId);
     }
 
     /**
      * 查询会话消息列表。
      */
-    public List<ChatMessageResponse> listMessages(Long sessionId) {
+    public Page<ChatMessageResponse> listMessages(Long sessionId, Pageable pageable) {
         ChatSession session = requireTenantOwnedSession(sessionId);
-        return chatMessageRepository.findAllBySession_IdOrderByIdAsc(session.getId())
-                .stream()
-                .map(this::toMessageResponse)
-                .toList();
+        return chatMessageRepository.findAllBySession_Id(session.getId(), pageable)
+                .map(this::toMessageResponse);
     }
 
     /**
@@ -252,10 +261,16 @@ public class ChatApplicationService {
     private ChatTurnResponse completePreparedChatTurn(PreparedChatTurn enrichedChatTurn) {
         try {
             boolean hasMcpTools = hasMcpTools(enrichedChatTurn);
-            ModelGatewayResult result = hasMcpTools
-                    ? mcpChatOrchestratorService.completeTurn(enrichedChatTurn)
-                    : modelGatewayService.generateReply(enrichedChatTurn);
-            ChatTurnResponse response = persistAssistantReplyTransactional(enrichedChatTurn, result, !hasMcpTools);
+            boolean isWorkflow = enrichedChatTurn.workflowId() != null;
+            ModelGatewayResult result;
+            if (isWorkflow) {
+                result = workflowOrchestratorService.executeWorkflow(enrichedChatTurn);
+            } else if (hasMcpTools) {
+                result = mcpChatOrchestratorService.completeTurn(enrichedChatTurn);
+            } else {
+                result = modelGatewayService.generateReply(enrichedChatTurn);
+            }
+            ChatTurnResponse response = persistAssistantReplyTransactional(enrichedChatTurn, result, !hasMcpTools && !isWorkflow);
             scheduleSessionMemoryRefresh(enrichedChatTurn);
             return response;
         } catch (ModelGatewayInvocationException ex) {
@@ -284,6 +299,8 @@ public class ChatApplicationService {
 
         touchSession(session);
 
+        Long workflowId = agent.getWorkflow() == null ? null : agent.getWorkflow().getId();
+
         return new PreparedChatTurn(
                 currentUser.tenantId(),
                 currentUser.userId(),
@@ -298,7 +315,8 @@ public class ChatApplicationService {
                 mcpTools,
                 null,
                 null,
-                slidingWindowContextBuilder.buildWindow(session.getId(), agent.getContextWindowSize())
+                slidingWindowContextBuilder.buildWindow(session.getId(), agent.getContextWindowSize()),
+                workflowId
         );
     }
 
@@ -332,7 +350,8 @@ public class ChatApplicationService {
                 preparedChatTurn.mcpTools(),
                 retrievalResult.retrievalContext(),
                 retrievalResult.debug(),
-                preparedChatTurn.historyMessages()
+                preparedChatTurn.historyMessages(),
+                preparedChatTurn.workflowId()
         );
     }
 
@@ -409,6 +428,7 @@ public class ChatApplicationService {
         ChatMessage savedAssistantMessage = chatMessageRepository.saveAndFlush(assistantMessage);
 
         touchSession(session);
+        evictSlidingWindowCache(session.getId());
         ModelCallLog savedModelCallLog = null;
         if (recordModelLog) {
             savedModelCallLog = modelCallLogService.recordSuccess(preparedChatTurn, result);
@@ -689,6 +709,13 @@ public class ChatApplicationService {
     private void touchSession(ChatSession session) {
         session.setUpdatedAt(Instant.now(clock));
         chatSessionRepository.save(session);
+    }
+
+    private void evictSlidingWindowCache(Long sessionId) {
+        var cache = cacheManager.getCache(CacheNames.SLIDING_WINDOW);
+        if (cache != null) {
+            cache.evict(sessionId);
+        }
     }
 
     /**

@@ -73,6 +73,9 @@ public record UpdateAgentRequest(
 
         @Schema(description = "是否启用", example = "true")
         @NotNull
-        Boolean enabled
+        Boolean enabled,
+
+        @Schema(description = "绑定工作流 ID", example = "1")
+        Long workflowId
 ) {
 }

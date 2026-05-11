@@ -91,6 +91,10 @@ public class Agent extends BaseEntity {
     @Column(name = "enabled", nullable = false)
     private boolean enabled = true;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "workflow_id")
+    private com.enjoy.agent.workflow.domain.entity.Workflow workflow;
+
     public Long getId() {
         return id;
     }
@@ -225,5 +229,13 @@ public class Agent extends BaseEntity {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public com.enjoy.agent.workflow.domain.entity.Workflow getWorkflow() {
+        return workflow;
+    }
+
+    public void setWorkflow(com.enjoy.agent.workflow.domain.entity.Workflow workflow) {
+        this.workflow = workflow;
     }
 }

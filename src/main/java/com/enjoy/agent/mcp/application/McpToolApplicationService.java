@@ -12,6 +12,8 @@ import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
 import java.time.Instant;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -125,19 +127,15 @@ public class McpToolApplicationService {
      * 查询当前租户下的 MCP Tool 列表，可按 Server 过滤。
      */
     @Transactional(readOnly = true)
-    public List<McpToolResponse> listTools(Long serverId) {
+    public Page<McpToolResponse> listTools(Long serverId, Pageable pageable) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
         if (serverId != null) {
             mcpServerApplicationService.requireTenantOwnedServer(serverId);
-            return mcpToolRepository.findAllByServer_IdOrderByIdAsc(serverId)
-                    .stream()
-                    .map(this::toResponse)
-                    .toList();
+            return mcpToolRepository.findAllByServer_Id(serverId, pageable)
+                    .map(this::toResponse);
         }
-        return mcpToolRepository.findAllByTenant_IdOrderByIdDesc(currentUser.tenantId())
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        return mcpToolRepository.findAllByTenant_Id(currentUser.tenantId(), pageable)
+                .map(this::toResponse);
     }
 
     /**
@@ -154,7 +152,15 @@ public class McpToolApplicationService {
     @Transactional(readOnly = true)
     public McpTool requireTenantOwnedTool(Long id) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        return mcpToolRepository.findByIdAndTenant_Id(id, currentUser.tenantId())
+        return requireTenantOwnedTool(currentUser.tenantId(), id);
+    }
+
+    /**
+     * 校验并返回指定租户下的 MCP Tool，供异步运行时使用。
+     */
+    @Transactional(readOnly = true)
+    public McpTool requireTenantOwnedTool(Long tenantId, Long id) {
+        return mcpToolRepository.findByIdAndTenant_Id(id, tenantId)
                 .orElseThrow(() -> new ApiException("MCP_TOOL_NOT_FOUND", "MCP tool not found", HttpStatus.NOT_FOUND));
     }
 

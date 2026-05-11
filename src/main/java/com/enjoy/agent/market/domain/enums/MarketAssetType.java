@@ -6,5 +6,6 @@ package com.enjoy.agent.market.domain.enums;
 public enum MarketAssetType {
     AGENT,
     KNOWLEDGE_BASE,
-    MCP_SERVER
+    MCP_SERVER,
+    WORKFLOW
 }

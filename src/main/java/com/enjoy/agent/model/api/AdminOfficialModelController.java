@@ -8,11 +8,12 @@ import com.enjoy.agent.model.api.response.OfficialModelConfigResponse;
 import com.enjoy.agent.model.api.response.OfficialModelCredentialResponse;
 import com.enjoy.agent.model.application.OfficialModelAdminApplicationService;
 import com.enjoy.agent.shared.api.ApiResponse;
+import com.enjoy.agent.shared.api.PagedResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -44,8 +45,8 @@ public class AdminOfficialModelController {
 
     @Operation(summary = "官方模型凭证列表")
     @GetMapping("/credentials")
-    public ApiResponse<List<OfficialModelCredentialResponse>> listCredentials() {
-        return ApiResponse.success(officialModelAdminApplicationService.listCredentials());
+    public ApiResponse<PagedResponse<OfficialModelCredentialResponse>> listCredentials(Pageable pageable) {
+        return ApiResponse.success(PagedResponse.of(officialModelAdminApplicationService.listCredentials(pageable)));
     }
 
     @Operation(summary = "官方模型凭证详情")
@@ -80,8 +81,8 @@ public class AdminOfficialModelController {
 
     @Operation(summary = "官方模型配置列表")
     @GetMapping("/configs")
-    public ApiResponse<List<OfficialModelConfigResponse>> listConfigs() {
-        return ApiResponse.success(officialModelAdminApplicationService.listConfigs());
+    public ApiResponse<PagedResponse<OfficialModelConfigResponse>> listConfigs(Pageable pageable) {
+        return ApiResponse.success(PagedResponse.of(officialModelAdminApplicationService.listConfigs(pageable)));
     }
 
     @Operation(summary = "官方模型配置详情")

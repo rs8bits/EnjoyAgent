@@ -3,6 +3,8 @@ package com.enjoy.agent.credential.infrastructure.persistence;
 import com.enjoy.agent.credential.domain.entity.Credential;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 /**
@@ -14,6 +16,8 @@ public interface CredentialRepository extends JpaRepository<Credential, Long> {
      * 查询当前用户的所有凭证。
      */
     List<Credential> findAllByUser_IdOrderByIdDesc(Long userId);
+
+    Page<Credential> findAllByUser_Id(Long userId, Pageable pageable);
 
     /**
      * 按 ID 和用户 ID 查询凭证，防止越权访问。

@@ -3,6 +3,8 @@ package com.enjoy.agent.knowledge.infrastructure.persistence;
 import com.enjoy.agent.knowledge.domain.entity.KnowledgeDocument;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -16,6 +18,9 @@ public interface KnowledgeDocumentRepository extends JpaRepository<KnowledgeDocu
      */
     @EntityGraph(attributePaths = {"tenant", "knowledgeBase"})
     List<KnowledgeDocument> findAllByKnowledgeBase_IdOrderByIdDesc(Long knowledgeBaseId);
+
+    @EntityGraph(attributePaths = {"tenant", "knowledgeBase"})
+    Page<KnowledgeDocument> findAllByKnowledgeBase_Id(Long knowledgeBaseId, Pageable pageable);
 
     /**
      * 查询当前租户、当前知识库下的单个文档。

@@ -7,11 +7,12 @@ import com.enjoy.agent.market.api.response.MarketAssetResponse;
 import com.enjoy.agent.market.application.MarketAssetApplicationService;
 import com.enjoy.agent.market.domain.enums.MarketAssetType;
 import com.enjoy.agent.shared.api.ApiResponse;
+import com.enjoy.agent.shared.api.PagedResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -59,18 +60,28 @@ public class MarketAssetController {
         return ApiResponse.success(marketAssetApplicationService.submitMcpServerAsset(serverId, request), "Market asset submitted");
     }
 
+    @Operation(summary = "提交工作流到市场")
+    @PostMapping("/assets/workflows/{workflowId}/submit")
+    public ApiResponse<MarketAssetResponse> submitWorkflowAsset(
+            @PathVariable Long workflowId,
+            @Valid @RequestBody SubmitMarketAssetRequest request
+    ) {
+        return ApiResponse.success(marketAssetApplicationService.submitWorkflowAsset(workflowId, request), "Market asset submitted");
+    }
+
     @Operation(summary = "当前用户提交记录")
     @GetMapping("/submissions")
-    public ApiResponse<List<MarketAssetResponse>> listCurrentUserSubmissions() {
-        return ApiResponse.success(marketAssetApplicationService.listCurrentUserSubmissions());
+    public ApiResponse<PagedResponse<MarketAssetResponse>> listCurrentUserSubmissions(Pageable pageable) {
+        return ApiResponse.success(PagedResponse.of(marketAssetApplicationService.listCurrentUserSubmissions(pageable)));
     }
 
     @Operation(summary = "已上架市场资产列表")
     @GetMapping("/assets")
-    public ApiResponse<List<MarketAssetResponse>> listPublishedAssets(
-            @RequestParam(required = false) MarketAssetType assetType
+    public ApiResponse<PagedResponse<MarketAssetResponse>> listPublishedAssets(
+            @RequestParam(required = false) MarketAssetType assetType,
+            Pageable pageable
     ) {
-        return ApiResponse.success(marketAssetApplicationService.listPublishedAssets(assetType));
+        return ApiResponse.success(PagedResponse.of(marketAssetApplicationService.listPublishedAssets(assetType, pageable)));
     }
 
     @Operation(summary = "市场资产详情")

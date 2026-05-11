@@ -4,10 +4,11 @@ import com.enjoy.agent.model.api.response.OfficialModelConfigResponse;
 import com.enjoy.agent.model.application.OfficialModelAdminApplicationService;
 import com.enjoy.agent.model.domain.enums.ModelType;
 import com.enjoy.agent.shared.api.ApiResponse;
+import com.enjoy.agent.shared.api.PagedResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -27,9 +28,10 @@ public class OfficialModelController {
 
     @Operation(summary = "官方模型列表")
     @GetMapping
-    public ApiResponse<List<OfficialModelConfigResponse>> listEnabledConfigs(
-            @RequestParam(required = false) ModelType modelType
+    public ApiResponse<PagedResponse<OfficialModelConfigResponse>> listEnabledConfigs(
+            @RequestParam(required = false) ModelType modelType,
+            Pageable pageable
     ) {
-        return ApiResponse.success(officialModelAdminApplicationService.listEnabledConfigsForUsers(modelType));
+        return ApiResponse.success(PagedResponse.of(officialModelAdminApplicationService.listEnabledConfigsForUsers(modelType, pageable)));
     }
 }

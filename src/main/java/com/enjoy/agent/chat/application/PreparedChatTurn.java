@@ -23,6 +23,7 @@ public record PreparedChatTurn(
         List<PreparedMcpTool> mcpTools,
         String retrievalContext,
         KnowledgeRetrievalDebug retrievalDebug,
-        List<ChatPromptMessage> historyMessages
+        List<ChatPromptMessage> historyMessages,
+        Long workflowId
 ) {
 }

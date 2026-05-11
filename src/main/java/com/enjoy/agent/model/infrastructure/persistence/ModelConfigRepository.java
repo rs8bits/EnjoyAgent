@@ -3,6 +3,8 @@ package com.enjoy.agent.model.infrastructure.persistence;
 import com.enjoy.agent.model.domain.entity.ModelConfig;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -16,6 +18,9 @@ public interface ModelConfigRepository extends JpaRepository<ModelConfig, Long> 
      */
     @EntityGraph(attributePaths = {"tenant", "credential"})
     List<ModelConfig> findAllByTenant_IdOrderByIdDesc(Long tenantId);
+
+    @EntityGraph(attributePaths = {"tenant", "credential"})
+    Page<ModelConfig> findAllByTenant_Id(Long tenantId, Pageable pageable);
 
     /**
      * 按 ID 和租户查询模型配置，防止跨租户访问。

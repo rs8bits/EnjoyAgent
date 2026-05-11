@@ -3,6 +3,8 @@ package com.enjoy.agent.agent.infrastructure.persistence;
 import com.enjoy.agent.agent.domain.entity.Agent;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -16,6 +18,9 @@ public interface AgentRepository extends JpaRepository<Agent, Long> {
      */
     @EntityGraph(attributePaths = {"tenant", "modelConfig", "knowledgeBase", "rerankModelConfig"})
     List<Agent> findAllByTenant_IdOrderByIdDesc(Long tenantId);
+
+    @EntityGraph(attributePaths = {"tenant", "modelConfig", "knowledgeBase", "rerankModelConfig"})
+    Page<Agent> findAllByTenant_Id(Long tenantId, Pageable pageable);
 
     /**
      * 按 ID 和租户查询 Agent，防止跨租户访问。
@@ -46,4 +51,6 @@ public interface AgentRepository extends JpaRepository<Agent, Long> {
      * 判断是否还有 Agent 正在使用某个知识库。
      */
     boolean existsByKnowledgeBase_Id(Long knowledgeBaseId);
+
+    Optional<Agent> findFirstByWorkflow_IdAndTenant_IdOrderByIdAsc(Long workflowId, Long tenantId);
 }

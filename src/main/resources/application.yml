@@ -12,18 +12,19 @@ spring:
       - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
   profiles:
     active: local
+  data:
+    web:
+      pageable:
+        default-page-size: 20
+        max-page-size: 200
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
   # PostgreSQL 数据源配置
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:enjoy_agent}
     username: ${DB_USERNAME:enjoy}
     password: ${DB_PASSWORD:enjoy123}
-  data:
-    # Redis 暂时只作为基础设施预留，先不启用 Repository 扫描
-    redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
-      repositories:
-        enabled: false
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
