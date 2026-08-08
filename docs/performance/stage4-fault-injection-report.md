@@ -89,31 +89,35 @@ HTTP 408 表示明确的上游超时响应。本场景验证有限重试和停�
 
 ## 5. 实测结果
 
-最终有效运行：`performance/results/fault-injection-20260808T085128Z-37612/`
+最终有效运行：`performance/results/fault-injection-20260808T091354Z-11020/`
 
-- 时间：2026-08-08 16:51–16:52（Asia/Shanghai）
+- 时间：2026-08-08 17:13–17:14（Asia/Shanghai）
 - 结果：**5/5 PASS**
-- JAR SHA-256：`7d81a182cead856933635eddf2b69d60b9fdc4104dd346727c398e519adf960f`
+- Git commit：`ab45b1435bc1e5d8b67766251c068473b56dfc03`
+- JAR SHA-256：`04a1b475960e8688f7706af27fa37a205896b450ec0ff5a4521c5d025477c78c`
 - Fixture：65,536 bytes，SHA-256 `1aeca7128d93552ed525b68e29b973b90c2dbaed4c4fc218c9d47e7bb1599562`
 - Java：Amazon Corretto 21.0.10；Docker Compose：5.1.1；平台：Darwin arm64
 
+该 JAR 来自上述 commit 的独立 detached worktree；构建前工作树为空，Maven 107/107 项测试通过。
+演练运行器位于主工作树，因此原始 metadata 的 `git_dirty_count=19` 只描述运行器所在目录，不影响被测 JAR 的来源。
+
 | 场景 | 实测结果 | 关键量化证据 |
 |---|---|---|
-| 双实例缓存失效 | PASS | B 已确认一次 `agent-config-v4` L1 hit；A 提交 `v2` 后，B 在 **60 ms** 读到新值，显著小于 30 秒 TTL |
-| Redis 宕机/恢复 | PASS | L1 过期且 Redis 停止后 `/api/auth/me` 仍为 HTTP 200；curl 实际耗时 **14.510 ms**（Runner 包络 45 ms），L2 error 计数为 **2**；Redis 恢复后耗时 **16.957 ms**、仍为 200 |
-| RabbitMQ/Outbox | PASS | Broker 停止时上传以 **129.665 ms** 返回 HTTP 202；Outbox 在故障中为 `PENDING` 且记录 `Connection refused`，恢复后第 9 次发布尝试变为 `PUBLISHED`，文档 551 为 `READY` |
-| Worker 崩溃恢复 | PASS | 文档 552 为 `PROCESSING` 时对 JVM 执行真实 `SIGKILL`，主队列出现 `ready=1/consumers=0`；重启后 fence **1→2**、逻辑 attempt 保持 **1**、94 个 chunk，终态 token/lease 清空 |
+| 双实例缓存失效 | PASS | B 已确认一次 `agent-config-v4` L1 hit；A 提交 `v2` 后，B 在 **56 ms** 读到新值，显著小于 30 秒 TTL |
+| Redis 宕机/恢复 | PASS | L1 过期且 Redis 停止后 `/api/auth/me` 仍为 HTTP 200；curl 实际耗时 **14.938 ms**（Runner 包络 41 ms），L2 error 计数为 **2**；Redis 恢复后耗时 **8.907 ms**、仍为 200 |
+| RabbitMQ/Outbox | PASS | Broker 停止时上传以 **118.214 ms** 返回 HTTP 202；Outbox 在故障中为 `PENDING` 且记录 `Connection refused`，恢复后第 9 次发布尝试变为 `PUBLISHED`，文档 658 为 `READY` |
+| Worker 崩溃恢复 | PASS | 文档 659 为 `PROCESSING` 时对 JVM 执行真实 `SIGKILL`，主队列出现 `ready=1/consumers=0`；重启后 fence **1→2**、逻辑 attempt 保持 **1**、94 个 chunk，终态 token/lease 清空 |
 | Embedding 超时 | PASS | 连续 **3** 个 HTTP 408 对应 attempt 1–3 和 3 条已发布 Outbox，耗尽后 parking `ready=1`；Mock 恢复后人工 attempt 4 生成 94 个 chunk 并进入 `READY` |
 
-最终数据核验：文档 551–553 对应 6 条 Outbox 均为 `PUBLISHED`，全库 `PENDING/CLAIMED=0`；脚本专用主队列和 parking queue 均已删除，18081/18082/18083 均已释放，PostgreSQL、Redis、RabbitMQ、MinIO、Elasticsearch 均恢复运行。
+最终数据核验：文档 658–660 对应 6 条 Outbox 均为 `PUBLISHED`，全库 `PENDING/CLAIMED=0`；脚本专用主队列和 parking queue 均已删除，18081/18082/18083 均已释放，PostgreSQL、Redis、RabbitMQ、MinIO、Elasticsearch 均恢复运行。
 
-完整摘要见 `performance/results/fault-injection-20260808T085128Z-37612/report.md` 和同目录 `summary.json`。
+完整摘要见 `performance/results/fault-injection-20260808T091354Z-11020/report.md` 和同目录 `summary.json`。
 
 ### 5.1 Redis 快速失败改造对比
 
 旧版 JAR 的完整通过运行位于 `performance/results/fault-injection-20260808T084822Z-26668/`，JAR SHA-256 为 `a06f30c75232f344953479406ba64bbee5141024522b511d2fffb3c44b461268`。该运行证明可靠性语义成立，但 Redis 故障请求耗时 9.860105 秒，不再作为最终结果。
 
-最终 JAR 将 Redis 命令超时、Redisson connect/command timeout 和 retryAttempts 调整为快速失败配置。同一演练中 Redis 故障请求从 **9.860105 s** 降至 **0.014510 s**，降低 **99.853%**，约快 **679.5 倍**；HTTP 状态和响应业务语义均保持成功。该数字是同机单次故障演练对比，只用于证明快速失败参数生效，不应解释为稳定延迟分位数。
+最终 JAR 将 Redis 命令超时、Redisson connect/command timeout 和 retryAttempts 调整为快速失败配置。历史修复前演练的 Redis 故障请求为 **9.860105 s**，clean-commit 最终演练为 **0.014938 s**，相差 **99.849%**、约 **660.1 倍**；HTTP 状态和响应业务语义均保持成功。两次不是严格隔离所有依赖版本的 A/B，因此该数字只作为问题定位和快速失败生效的诊断证据，不应解释为稳定延迟分位数。
 
 ### 5.2 无效试跑说明
 
