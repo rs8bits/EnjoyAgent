@@ -7,6 +7,10 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import jakarta.persistence.LockModeType;
 
 /**
  * 知识库文档仓储接口。
@@ -27,6 +31,14 @@ public interface KnowledgeDocumentRepository extends JpaRepository<KnowledgeDocu
      */
     @EntityGraph(attributePaths = {"tenant", "knowledgeBase"})
     Optional<KnowledgeDocument> findByIdAndKnowledgeBase_IdAndTenant_Id(Long id, Long knowledgeBaseId, Long tenantId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select document from KnowledgeDocument document where document.id = :id")
+    Optional<KnowledgeDocument> findByIdForUpdate(@Param("id") Long id);
+
+    @EntityGraph(attributePaths = {"tenant", "knowledgeBase"})
+    @Query("select document from KnowledgeDocument document where document.id = :id")
+    Optional<KnowledgeDocument> findByIdWithRelations(@Param("id") Long id);
 
     /**
      * 判断知识库下是否还有文档。

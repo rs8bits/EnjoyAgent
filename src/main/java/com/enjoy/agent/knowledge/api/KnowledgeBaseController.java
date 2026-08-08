@@ -17,6 +17,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -101,7 +103,7 @@ public class KnowledgeBaseController {
      */
     @Operation(
             summary = "上传文档",
-            description = "上传 txt、md、pdf 文档到知识库，并同步完成文本提取、切片和向量化",
+            description = "上传 txt、md、pdf 文档到知识库；异步模式返回 202 和 QUEUED 文档，后台完成解析、切片和向量化",
             requestBody = @RequestBody(
                     required = true,
                     content = @Content(
@@ -111,11 +113,17 @@ public class KnowledgeBaseController {
             )
     )
     @PostMapping(value = "/{id}/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ApiResponse<KnowledgeDocumentResponse> uploadDocument(
+    public ResponseEntity<ApiResponse<KnowledgeDocumentResponse>> uploadDocument(
             @PathVariable Long id,
             @RequestPart("file") MultipartFile file
     ) {
-        return ApiResponse.success(knowledgeDocumentApplicationService.uploadDocument(id, file), "Document uploaded");
+        KnowledgeDocumentResponse document = knowledgeDocumentApplicationService.uploadDocument(id, file);
+        boolean async = knowledgeDocumentApplicationService.isAsyncIngestEnabled();
+        ApiResponse<KnowledgeDocumentResponse> body = ApiResponse.success(
+                document,
+                async ? "Document accepted for processing" : "Document uploaded"
+        );
+        return ResponseEntity.status(async ? HttpStatus.ACCEPTED : HttpStatus.OK).body(body);
     }
 
     /**
@@ -137,6 +145,18 @@ public class KnowledgeBaseController {
             @PathVariable Long documentId
     ) {
         return ApiResponse.success(knowledgeDocumentApplicationService.getDocument(id, documentId));
+    }
+
+    @Operation(summary = "重试失败文档", description = "为 FAILED 文档创建新一轮可靠异步导入任务")
+    @PostMapping("/{id}/documents/{documentId}/retry")
+    public ApiResponse<KnowledgeDocumentResponse> retryDocument(
+            @PathVariable Long id,
+            @PathVariable Long documentId
+    ) {
+        return ApiResponse.success(
+                knowledgeDocumentApplicationService.retryFailedDocument(id, documentId),
+                "Document retry scheduled"
+        );
     }
 
     /**

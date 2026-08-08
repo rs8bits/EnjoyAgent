@@ -92,7 +92,7 @@ public class EmbeddingGatewayService {
             OpenAiEmbeddingOptions options,
             List<String> texts
     ) {
-        int batchSize = 10;
+        int batchSize = knowledgeProperties.getEmbeddingBatchSize();
         List<float[]> vectors = new java.util.ArrayList<>(texts.size());
         for (int start = 0; start < texts.size(); start += batchSize) {
             int end = Math.min(start + batchSize, texts.size());
@@ -135,12 +135,18 @@ public class EmbeddingGatewayService {
 
     private String resolveBaseUrl(PreparedModelConfig modelConfig) {
         if (modelConfig.baseUrl() != null && !modelConfig.baseUrl().isBlank()) {
-            return modelConfig.baseUrl();
+            return ModelGatewayProperties.normalizeOpenaiBaseUrl(modelConfig.baseUrl());
         }
+
+        String configuredBaseUrl = modelGatewayProperties.getOpenaiBaseUrl();
+        if (!"https://api.openai.com".equals(configuredBaseUrl)) {
+            return configuredBaseUrl;
+        }
+
         String providerDefault = modelConfig.provider().defaultCompatibleBaseUrl();
-        if (providerDefault != null) {
-            return providerDefault;
+        if (providerDefault != null && !providerDefault.isBlank()) {
+            return ModelGatewayProperties.normalizeOpenaiBaseUrl(providerDefault);
         }
-        return modelGatewayProperties.getOpenaiBaseUrl();
+        return configuredBaseUrl;
     }
 }

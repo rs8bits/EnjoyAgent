@@ -14,6 +14,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import java.time.Instant;
 
 /**
  * 知识库文档实体。
@@ -55,6 +56,33 @@ public class KnowledgeDocument extends BaseEntity {
 
     @Column(name = "chunk_count", nullable = false)
     private Integer chunkCount = 0;
+
+    @Column(name = "processing_attempts", nullable = false)
+    private Integer processingAttempts = 0;
+
+    @Column(name = "processing_started_at")
+    private Instant processingStartedAt;
+
+    @Column(name = "completed_at")
+    private Instant completedAt;
+
+    @Column(name = "next_retry_at")
+    private Instant nextRetryAt;
+
+    @Column(name = "last_error_code", length = 64)
+    private String lastErrorCode;
+
+    @Column(name = "last_error_message", length = 1000)
+    private String lastErrorMessage;
+
+    @Column(name = "processing_token", length = 36)
+    private String processingToken;
+
+    @Column(name = "processing_fence", nullable = false)
+    private Long processingFence = 0L;
+
+    @Column(name = "processing_lease_until")
+    private Instant processingLeaseUntil;
 
     public Long getId() {
         return id;
@@ -134,5 +162,77 @@ public class KnowledgeDocument extends BaseEntity {
 
     public void setChunkCount(Integer chunkCount) {
         this.chunkCount = chunkCount;
+    }
+
+    public Integer getProcessingAttempts() {
+        return processingAttempts;
+    }
+
+    public void setProcessingAttempts(Integer processingAttempts) {
+        this.processingAttempts = processingAttempts;
+    }
+
+    public Instant getProcessingStartedAt() {
+        return processingStartedAt;
+    }
+
+    public void setProcessingStartedAt(Instant processingStartedAt) {
+        this.processingStartedAt = processingStartedAt;
+    }
+
+    public Instant getCompletedAt() {
+        return completedAt;
+    }
+
+    public void setCompletedAt(Instant completedAt) {
+        this.completedAt = completedAt;
+    }
+
+    public Instant getNextRetryAt() {
+        return nextRetryAt;
+    }
+
+    public void setNextRetryAt(Instant nextRetryAt) {
+        this.nextRetryAt = nextRetryAt;
+    }
+
+    public String getLastErrorCode() {
+        return lastErrorCode;
+    }
+
+    public void setLastErrorCode(String lastErrorCode) {
+        this.lastErrorCode = lastErrorCode;
+    }
+
+    public String getLastErrorMessage() {
+        return lastErrorMessage;
+    }
+
+    public void setLastErrorMessage(String lastErrorMessage) {
+        this.lastErrorMessage = lastErrorMessage;
+    }
+
+    public String getProcessingToken() {
+        return processingToken;
+    }
+
+    public void setProcessingToken(String processingToken) {
+        this.processingToken = processingToken;
+    }
+
+    public Long getProcessingFence() {
+        return processingFence;
+    }
+
+    public void setProcessingFence(Long processingFence) {
+        this.processingFence = processingFence;
+    }
+
+    public Instant getProcessingLeaseUntil() {
+        return processingLeaseUntil;
+    }
+
+    public void setProcessingLeaseUntil(Instant processingLeaseUntil) {
+        this.processingLeaseUntil = processingLeaseUntil;
     }
 }

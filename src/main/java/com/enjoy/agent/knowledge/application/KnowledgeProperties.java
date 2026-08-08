@@ -53,6 +53,11 @@ public class KnowledgeProperties {
      */
     private int embeddingDimensions = 1024;
 
+    /**
+     * 单次调用上游 Embedding API 的最大文本条数。
+     */
+    private int embeddingBatchSize = 20;
+
     public int getChunkSize() {
         return chunkSize;
     }
@@ -123,5 +128,16 @@ public class KnowledgeProperties {
 
     public void setEmbeddingDimensions(int embeddingDimensions) {
         this.embeddingDimensions = embeddingDimensions;
+    }
+
+    public int getEmbeddingBatchSize() {
+        return embeddingBatchSize;
+    }
+
+    public void setEmbeddingBatchSize(int embeddingBatchSize) {
+        if (embeddingBatchSize < 1) {
+            throw new IllegalArgumentException("Embedding batch size must be positive");
+        }
+        this.embeddingBatchSize = embeddingBatchSize;
     }
 }

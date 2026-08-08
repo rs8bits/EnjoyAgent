@@ -32,6 +32,10 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USERNAME:guest}
     password: ${RABBITMQ_PASSWORD:guest}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
     listener:
       simple:
         default-requeue-rejected: false
@@ -110,12 +114,31 @@ enjoy:
     chunk-size: ${APP_KNOWLEDGE_CHUNK_SIZE:800}
     chunk-overlap: ${APP_KNOWLEDGE_CHUNK_OVERLAP:100}
     embedding-dimensions: ${APP_KNOWLEDGE_EMBEDDING_DIMENSIONS:1024}
+    embedding-batch-size: ${APP_KNOWLEDGE_EMBEDDING_BATCH_SIZE:20}
     recall-top-k: ${APP_KNOWLEDGE_RECALL_TOP_K:12}
     retrieval-top-k: ${APP_KNOWLEDGE_RETRIEVAL_TOP_K:4}
     query-rewrite-enabled: ${APP_KNOWLEDGE_QUERY_REWRITE_ENABLED:true}
     query-rewrite-max-context-messages: ${APP_KNOWLEDGE_QUERY_REWRITE_MAX_CONTEXT_MESSAGES:6}
     retrieval-debug-enabled: ${APP_KNOWLEDGE_RETRIEVAL_DEBUG_ENABLED:true}
     rerank-base-url: ${APP_KNOWLEDGE_RERANK_BASE_URL:https://dashscope.aliyuncs.com}
+    ingest:
+      async-enabled: ${APP_KNOWLEDGE_ASYNC_INGEST_ENABLED:true}
+      exchange: ${APP_KNOWLEDGE_INGEST_EXCHANGE:enjoy.knowledge.events}
+      routing-key: ${APP_KNOWLEDGE_INGEST_ROUTING_KEY:knowledge.document.ingest}
+      queue: ${APP_KNOWLEDGE_INGEST_QUEUE:knowledge.document.ingest.queue}
+      parking-routing-key: ${APP_KNOWLEDGE_INGEST_PARKING_ROUTING_KEY:knowledge.document.ingest.parking}
+      parking-queue: ${APP_KNOWLEDGE_INGEST_PARKING_QUEUE:knowledge.document.ingest.parking}
+      worker-concurrency: ${APP_KNOWLEDGE_INGEST_WORKER_CONCURRENCY:4}
+      prefetch: ${APP_KNOWLEDGE_INGEST_PREFETCH:2}
+      max-attempts: ${APP_KNOWLEDGE_INGEST_MAX_ATTEMPTS:3}
+      retry-delays: ${APP_KNOWLEDGE_INGEST_RETRY_DELAYS:5s,30s}
+      outbox-batch-size: ${APP_KNOWLEDGE_INGEST_OUTBOX_BATCH_SIZE:50}
+      outbox-claim-timeout: ${APP_KNOWLEDGE_INGEST_OUTBOX_CLAIM_TIMEOUT:30s}
+      publisher-confirm-timeout: ${APP_KNOWLEDGE_INGEST_PUBLISHER_CONFIRM_TIMEOUT:5s}
+      outbox-publish-retry-delay: ${APP_KNOWLEDGE_INGEST_OUTBOX_PUBLISH_RETRY_DELAY:2s}
+      processing-lease-duration: ${APP_KNOWLEDGE_INGEST_PROCESSING_LEASE_DURATION:10m}
+      outbox-relay-delay-ms: ${APP_KNOWLEDGE_INGEST_OUTBOX_RELAY_DELAY_MS:500}
+      outbox-relay-initial-delay-ms: ${APP_KNOWLEDGE_INGEST_OUTBOX_RELAY_INITIAL_DELAY_MS:500}
     search:
       enabled: ${APP_KNOWLEDGE_SEARCH_ENABLED:false}
       base-url: ${APP_KNOWLEDGE_SEARCH_BASE_URL:http://localhost:9200}

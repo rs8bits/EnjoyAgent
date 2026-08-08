@@ -39,7 +39,7 @@ public class ModelGatewayProperties {
      * 如果用户误把 /v1 或完整 chat/completions 路径写进来，这里统一裁掉，
      * 交给 Spring AI 自己去拼接最终请求路径。
      */
-    private String normalizeOpenaiBaseUrl(String rawBaseUrl) {
+    public static String normalizeOpenaiBaseUrl(String rawBaseUrl) {
         if (rawBaseUrl == null || rawBaseUrl.isBlank()) {
             return "https://api.openai.com";
         }

@@ -29,6 +29,24 @@ public record KnowledgeDocumentResponse(
         @Schema(description = "切片数量")
         Integer chunkCount,
 
+        @Schema(description = "累计处理尝试次数")
+        Integer processingAttempts,
+
+        @Schema(description = "下一次自动重试时间")
+        Instant nextRetryAt,
+
+        @Schema(description = "最后一次处理错误码")
+        String lastErrorCode,
+
+        @Schema(description = "最后一次处理错误信息")
+        String lastErrorMessage,
+
+        @Schema(description = "首次开始处理时间")
+        Instant processingStartedAt,
+
+        @Schema(description = "处理完成或最终失败时间")
+        Instant completedAt,
+
         @Schema(description = "创建时间")
         Instant createdAt,
 
