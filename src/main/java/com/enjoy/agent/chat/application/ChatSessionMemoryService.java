@@ -12,6 +12,7 @@ import com.enjoy.agent.modelgateway.application.ModelGatewayInvocationException;
 import com.enjoy.agent.modelgateway.application.ModelGatewayService;
 import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
 import com.enjoy.agent.shared.config.CacheNames;
+import com.enjoy.agent.shared.config.CacheKeys;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,7 +68,12 @@ public class ChatSessionMemoryService {
     /**
      * 读取当前会话已有的长期摘要。
      */
-    @Cacheable(value = CacheNames.SESSION_SUMMARY, key = "#sessionId", unless = "#result == null")
+    @Cacheable(
+            value = CacheNames.SESSION_SUMMARY,
+            key = "T(com.enjoy.agent.shared.config.CacheKeys).sessionSummary(#tenantId, #sessionId, #memoryStrategy)",
+            condition = "@cacheProperties.isSessionSummaryEnabled()",
+            sync = true
+    )
     public String loadSummary(Long tenantId, Long sessionId, MemoryStrategy memoryStrategy) {
         if (memoryStrategy == null) {
             return null;
@@ -166,7 +172,7 @@ public class ChatSessionMemoryService {
         });
         var cache = cacheManager.getCache(CacheNames.SESSION_SUMMARY);
         if (cache != null) {
-            cache.evict(sessionId);
+            cache.evict(CacheKeys.sessionSummary(tenantId, sessionId, memoryStrategy));
         }
     }
 

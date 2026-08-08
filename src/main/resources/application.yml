@@ -20,6 +20,8 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
+      timeout: ${REDIS_COMMAND_TIMEOUT:750ms}
   # PostgreSQL 数据源配置
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:enjoy_agent}
@@ -60,6 +62,22 @@ logging:
 
 # 平台自定义配置
 enjoy:
+  cache:
+    agent-config-enabled: ${APP_CACHE_AGENT_CONFIG_ENABLED:true}
+    agent-config-local-enabled: ${APP_CACHE_AGENT_CONFIG_LOCAL_ENABLED:true}
+    agent-config-distributed-lock-enabled: ${APP_CACHE_AGENT_CONFIG_LOCK_ENABLED:true}
+    auth-context-enabled: ${APP_CACHE_AUTH_CONTEXT_ENABLED:true}
+    auth-context-local-enabled: ${APP_CACHE_AUTH_CONTEXT_LOCAL_ENABLED:true}
+    session-summary-enabled: ${APP_CACHE_SESSION_SUMMARY_ENABLED:true}
+    default-ttl: ${APP_CACHE_DEFAULT_TTL:10m}
+    agent-config-ttl: ${APP_CACHE_AGENT_CONFIG_TTL:1h}
+    agent-config-local-ttl: ${APP_CACHE_AGENT_CONFIG_LOCAL_TTL:30s}
+    agent-config-local-maximum-size: ${APP_CACHE_AGENT_CONFIG_LOCAL_MAXIMUM_SIZE:10000}
+    auth-context-ttl: ${APP_CACHE_AUTH_CONTEXT_TTL:30s}
+    auth-context-local-ttl: ${APP_CACHE_AUTH_CONTEXT_LOCAL_TTL:5s}
+    auth-context-local-maximum-size: ${APP_CACHE_AUTH_CONTEXT_LOCAL_MAXIMUM_SIZE:50000}
+    session-summary-ttl: ${APP_CACHE_SESSION_SUMMARY_TTL:30m}
+    distributed-lock-wait: ${APP_CACHE_DISTRIBUTED_LOCK_WAIT:500ms}
   security:
     jwt-secret: ${APP_JWT_SECRET:change-me-to-a-long-random-string}
     access-token-expiration-seconds: 7200

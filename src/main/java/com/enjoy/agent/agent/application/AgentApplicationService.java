@@ -133,7 +133,13 @@ public class AgentApplicationService {
     /**
      * 查询当前租户下的单个 Agent。
      */
-    @Cacheable(value = CacheNames.AGENT_CONFIG, key = "#id")
+    @Cacheable(
+            value = CacheNames.AGENT_CONFIG,
+            key = "T(com.enjoy.agent.shared.config.CacheKeys).agent(" +
+                    "T(com.enjoy.agent.shared.security.CurrentUserContext).requireCurrentUser().tenantId(), #id)",
+            condition = "@cacheProperties.isAgentConfigEnabled()",
+            sync = true
+    )
     @Transactional(readOnly = true)
     public AgentResponse getAgent(Long id) {
         return toResponse(requireTenantOwnedAgent(id));
@@ -142,7 +148,11 @@ public class AgentApplicationService {
     /**
      * 更新当前租户下的 Agent。
      */
-    @CacheEvict(value = CacheNames.AGENT_CONFIG, key = "#id")
+    @CacheEvict(
+            value = CacheNames.AGENT_CONFIG,
+            key = "T(com.enjoy.agent.shared.config.CacheKeys).agent(" +
+                    "T(com.enjoy.agent.shared.security.CurrentUserContext).requireCurrentUser().tenantId(), #id)"
+    )
     @Transactional
     public AgentResponse updateAgent(Long id, UpdateAgentRequest request) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
@@ -203,7 +213,11 @@ public class AgentApplicationService {
     /**
      * 删除当前租户下的 Agent。
      */
-    @CacheEvict(value = CacheNames.AGENT_CONFIG, key = "#id")
+    @CacheEvict(
+            value = CacheNames.AGENT_CONFIG,
+            key = "T(com.enjoy.agent.shared.config.CacheKeys).agent(" +
+                    "T(com.enjoy.agent.shared.security.CurrentUserContext).requireCurrentUser().tenantId(), #id)"
+    )
     @Transactional
     public void deleteAgent(Long id) {
         agentMcpToolBindingRepository.deleteAllByAgent_Id(id);

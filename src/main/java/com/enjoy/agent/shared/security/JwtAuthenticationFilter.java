@@ -1,11 +1,6 @@
 package com.enjoy.agent.shared.security;
 
-import com.enjoy.agent.auth.domain.enums.UserStatus;
 import com.enjoy.agent.shared.tenant.TenantContext;
-import com.enjoy.agent.tenant.domain.entity.TenantMember;
-import com.enjoy.agent.tenant.domain.enums.TenantMemberStatus;
-import com.enjoy.agent.tenant.domain.enums.TenantStatus;
-import com.enjoy.agent.tenant.infrastructure.persistence.TenantMemberRepository;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -13,6 +8,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import org.springframework.http.HttpHeaders;
+import org.slf4j.MDC;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.AuthenticationEntryPoint;
@@ -28,16 +24,16 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
-    private final TenantMemberRepository tenantMemberRepository;
+    private final AuthenticationSnapshotService authenticationSnapshotService;
     private final AuthenticationEntryPoint authenticationEntryPoint;
 
     public JwtAuthenticationFilter(
             JwtTokenProvider jwtTokenProvider,
-            TenantMemberRepository tenantMemberRepository,
+            AuthenticationSnapshotService authenticationSnapshotService,
             AuthenticationEntryPoint authenticationEntryPoint
     ) {
         this.jwtTokenProvider = jwtTokenProvider;
-        this.tenantMemberRepository = tenantMemberRepository;
+        this.authenticationSnapshotService = authenticationSnapshotService;
         this.authenticationEntryPoint = authenticationEntryPoint;
     }
 
@@ -58,20 +54,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
 
             JwtTokenClaims claims = jwtTokenProvider.parseToken(token);
-            TenantMember member = tenantMemberRepository.findByTenant_IdAndUser_Id(claims.tenantId(), claims.userId())
-                    .orElseThrow(() -> new BadCredentialsException("Authentication context not found"));
-
-            validateMember(member);
-
-            AuthenticatedUser authenticatedUser = new AuthenticatedUser(
-                    member.getUser().getId(),
-                    member.getUser().getEmail(),
-                    member.getUser().getDisplayName(),
-                    member.getTenant().getId(),
-                    member.getTenant().getCode(),
-                    member.getTenant().getName(),
-                    member.getRole(),
-                    member.getUser().getSystemRole()
+            AuthenticatedUser authenticatedUser = authenticationSnapshotService.load(
+                    claims.tenantId(),
+                    claims.userId()
             );
 
             UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
@@ -83,6 +68,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
             SecurityContextHolder.getContext().setAuthentication(authentication);
             TenantContext.setTenantId(authenticatedUser.tenantId());
+            MDC.put("tenantId", String.valueOf(authenticatedUser.tenantId()));
 
             filterChain.doFilter(request, response);
         } catch (JwtException | IllegalArgumentException ex) {
@@ -94,6 +80,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         } catch (BadCredentialsException ex) {
             authenticationEntryPoint.commence(request, response, ex);
         } finally {
+            MDC.remove("tenantId");
             TenantContext.clear();
             SecurityContextHolder.clearContext();
         }
@@ -110,18 +97,4 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         return authorization.substring(7).trim();
     }
 
-    /**
-     * 再次校验数据库里的用户、租户和成员关系状态，避免旧 token 越权。
-     */
-    private void validateMember(TenantMember member) {
-        if (member.getStatus() != TenantMemberStatus.ACTIVE) {
-            throw new BadCredentialsException("Tenant membership is disabled");
-        }
-        if (member.getUser().getStatus() != UserStatus.ACTIVE) {
-            throw new BadCredentialsException("User is disabled");
-        }
-        if (member.getTenant().getStatus() != TenantStatus.ACTIVE) {
-            throw new BadCredentialsException("Tenant is disabled");
-        }
-    }
 }

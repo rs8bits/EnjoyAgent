@@ -30,6 +30,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -53,6 +54,9 @@ class ChatSessionMemoryServiceTest {
 
     @Mock
     private CacheManager cacheManager;
+
+    @Mock
+    private Cache summaryCache;
 
     private ChatSessionMemoryService chatSessionMemoryService;
 
@@ -100,6 +104,7 @@ class ChatSessionMemoryServiceTest {
                 .thenReturn("- 用户目标\n- 了解系统现状");
         when(chatSessionRepository.findByIdAndTenant_Id(8L, 7L)).thenReturn(Optional.of(chatSession()));
         when(chatSessionMemoryRepository.save(any(ChatSessionMemory.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(cacheManager.getCache("session-summary-v3")).thenReturn(summaryCache);
 
         chatSessionMemoryService.refreshSummaryIfNeeded(7L, 8L, preparedSessionMemory, chatModelConfig);
 
@@ -110,6 +115,7 @@ class ChatSessionMemoryServiceTest {
         assertThat(savedMemory.getMemoryType()).isEqualTo(MemoryStrategy.SESSION_SUMMARY);
         assertThat(savedMemory.getLastMessageId()).isEqualTo(104L);
         assertThat(savedMemory.getVersion()).isEqualTo(1);
+        verify(summaryCache).evict("7:8:SESSION_SUMMARY");
     }
 
     @Test

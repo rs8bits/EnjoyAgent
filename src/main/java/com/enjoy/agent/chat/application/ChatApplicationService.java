@@ -45,7 +45,6 @@ import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
 import com.enjoy.agent.modelgateway.domain.enums.CredentialSource;
 import com.enjoy.agent.modelgateway.infrastructure.persistence.ModelCallLogRepository;
 import com.enjoy.agent.mcp.infrastructure.persistence.McpToolCallLogRepository;
-import com.enjoy.agent.shared.config.CacheNames;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.workflow.application.WorkflowOrchestratorService;
 import com.enjoy.agent.shared.exception.ApiError;
@@ -58,7 +57,6 @@ import java.io.IOException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
-import org.springframework.cache.CacheManager;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import java.util.Objects;
@@ -94,7 +92,6 @@ public class ChatApplicationService {
     private final BillingUsageEventRepository billingUsageEventRepository;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
-    private final CacheManager cacheManager;
     private final WorkflowOrchestratorService workflowOrchestratorService;
 
     public ChatApplicationService(
@@ -118,7 +115,6 @@ public class ChatApplicationService {
             BillingUsageEventRepository billingUsageEventRepository,
             TransactionTemplate transactionTemplate,
             Clock clock,
-            CacheManager cacheManager,
             WorkflowOrchestratorService workflowOrchestratorService
     ) {
         this.chatSessionRepository = chatSessionRepository;
@@ -141,7 +137,6 @@ public class ChatApplicationService {
         this.billingUsageEventRepository = billingUsageEventRepository;
         this.transactionTemplate = transactionTemplate;
         this.clock = clock;
-        this.cacheManager = cacheManager;
         this.workflowOrchestratorService = workflowOrchestratorService;
     }
 
@@ -206,7 +201,6 @@ public class ChatApplicationService {
             chatSessionRepository.delete(session);
             chatSessionRepository.flush();
         });
-        evictSlidingWindowCache(sessionId);
     }
 
     /**
@@ -428,7 +422,6 @@ public class ChatApplicationService {
         ChatMessage savedAssistantMessage = chatMessageRepository.saveAndFlush(assistantMessage);
 
         touchSession(session);
-        evictSlidingWindowCache(session.getId());
         ModelCallLog savedModelCallLog = null;
         if (recordModelLog) {
             savedModelCallLog = modelCallLogService.recordSuccess(preparedChatTurn, result);
@@ -709,13 +702,6 @@ public class ChatApplicationService {
     private void touchSession(ChatSession session) {
         session.setUpdatedAt(Instant.now(clock));
         chatSessionRepository.save(session);
-    }
-
-    private void evictSlidingWindowCache(Long sessionId) {
-        var cache = cacheManager.getCache(CacheNames.SLIDING_WINDOW);
-        if (cache != null) {
-            cache.evict(sessionId);
-        }
     }
 
     /**
