@@ -2,6 +2,11 @@
 /EnjoyAgent-backend/.idea/
 /.DS_Store
 /.env
+/performance/results/
+/performance/fixtures/generated/
+**/__pycache__/
+*.pyc
+/jmeter.log
 
 .idea/
 target/

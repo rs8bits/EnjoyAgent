@@ -1,0 +1,3 @@
+case_id	worker_concurrency	prefetch	embedding_batch_size	note
+baseline-w2-p1-b10	2	1	10	Stage 3 baseline confirmation
+batch-w4-p2-b20	4	2	20	Balanced candidate confirmation with embedding concurrency capped at four

@@ -1,0 +1,259 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="EnjoyAgent document ingestion" enabled="true">
+      <stringProp name="TestPlan.comments">Multipart document ingestion fixture. Authentication and result validation are handled by run-document-upload.sh.</stringProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+        <collectionProp name="Arguments.arguments"/>
+      </elementProp>
+    </TestPlan>
+    <hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Document ingestion" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller" enabled="true">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">${__P(loops,1)}</stringProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">${__P(threads,1)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(rampSeconds,0)}</stringProp>
+        <boolProp name="ThreadGroup.delayedStart">false</boolProp>
+        <boolProp name="ThreadGroup.scheduler">false</boolProp>
+        <stringProp name="ThreadGroup.duration"/>
+        <stringProp name="ThreadGroup.delay"/>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+      </ThreadGroup>
+      <hashTree>
+        <ConfigTestElement guiclass="HttpDefaultsGui" testclass="ConfigTestElement" testname="HTTP defaults" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${__P(host,127.0.0.1)}</stringProp>
+          <stringProp name="HTTPSampler.port">${__P(port,8080)}</stringProp>
+          <stringProp name="HTTPSampler.protocol">${__P(protocol,http)}</stringProp>
+          <stringProp name="HTTPSampler.connect_timeout">${__P(connectTimeoutMs,3000)}</stringProp>
+          <stringProp name="HTTPSampler.response_timeout">${__P(responseTimeoutMs,30000)}</stringProp>
+          <stringProp name="HTTPSampler.concurrentPool">6</stringProp>
+        </ConfigTestElement>
+        <hashTree/>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Accept</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Authorization</stringProp>
+              <stringProp name="Header.value">${__groovy(System.getenv('JMETER_ACCESS_TOKEN') ? 'Bearer ' + System.getenv('JMETER_ACCESS_TOKEN') : '')}</stringProp>
+            </elementProp>
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">X-Request-Id</stringProp>
+              <stringProp name="Header.value">jmeter-document-${__UUID()}</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+        <TransactionController guiclass="TransactionControllerGui" testclass="TransactionController" testname="DOCUMENT_E2E" enabled="true">
+          <boolProp name="TransactionController.includeTimers">true</boolProp>
+          <boolProp name="TransactionController.parent">true</boolProp>
+        </TransactionController>
+        <hashTree>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="DOCUMENT_UPLOAD" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+          <elementProp name="HTTPsampler.Files" elementType="HTTPFileArgs">
+            <collectionProp name="HTTPFileArgs.files">
+              <elementProp name="" elementType="HTTPFileArg">
+                <stringProp name="File.path">${__P(documentFile,)}</stringProp>
+                <stringProp name="File.paramname">file</stringProp>
+                <stringProp name="File.mimetype">${__P(contentType,text/plain)}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.path">/api/knowledge-bases/${__P(knowledgeBaseId,)}/documents</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.auto_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <boolProp name="HTTPSampler.DO_MULTIPART_POST">true</boolProp>
+          <boolProp name="HTTPSampler.BROWSER_COMPATIBLE_MULTIPART">false</boolProp>
+          <stringProp name="HTTPSampler.embedded_url_re"/>
+          <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="Initialize document iteration" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters"/>
+            <stringProp name="filename"/>
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">vars.put('documentId', '')
+vars.put('documentStatus', 'UNKNOWN')
+vars.put('pollDone', 'false')
+vars.put('pollAttempts', '0')
+vars.put('e2eSuccess', 'true')
+vars.put('iterationStartedMs', String.valueOf(System.currentTimeMillis()))</stringProp>
+          </JSR223PreProcessor>
+          <hashTree/>
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="Capture upload response" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters"/>
+            <stringProp name="filename"/>
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">import groovy.json.JsonSlurper
+
+def expectedCode = props.get('expectedStatus', '200')
+def body = null
+try {
+    body = new JsonSlurper().parseText(prev.getResponseDataAsString())
+} catch (Exception ignored) {
+    vars.put('e2eSuccess', 'false')
+    vars.put('pollDone', 'true')
+}
+
+def document = body?.data
+def documentId = document?.id?.toString()
+def status = document?.status?.toString() ?: 'UNKNOWN'
+vars.put('documentId', documentId ?: '')
+vars.put('documentStatus', status)
+
+def uploadOk = prev.getResponseCode() == expectedCode &amp;&amp; body?.success == true &amp;&amp; documentId
+if (expectedCode == '200' &amp;&amp; status != 'READY') {
+    uploadOk = false
+}
+if (!uploadOk) {
+    vars.put('e2eSuccess', 'false')
+    vars.put('pollDone', 'true')
+    prev.setSuccessful(false)
+    prev.setResponseMessage('Invalid upload response; expectedCode=' + expectedCode + ', status=' + status)
+} else if (status == 'READY') {
+    vars.put('pollDone', 'true')
+} else if (status == 'FAILED') {
+    vars.put('e2eSuccess', 'false')
+    vars.put('pollDone', 'true')
+} else if (!props.get('pollUntilReady', 'false').toBoolean()) {
+    vars.put('pollDone', 'true')
+}</stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Expected upload HTTP status" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="1">${__P(expectedStatus,200)}</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Unexpected document upload HTTP status</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Upload API success" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="2">&quot;success&quot;:true</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Expected upload response success=true</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_data</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">16</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+        <IfController guiclass="IfControllerPanel" testclass="IfController" testname="Polling enabled" enabled="true">
+          <stringProp name="IfController.condition">${__groovy(props.get('pollUntilReady'\, 'false').toBoolean() &amp;&amp; !(vars.get('pollDone') ?: 'true').toBoolean())}</stringProp>
+          <boolProp name="IfController.evaluateAll">false</boolProp>
+          <boolProp name="IfController.useExpression">true</boolProp>
+        </IfController>
+        <hashTree>
+          <WhileController guiclass="WhileControllerGui" testclass="WhileController" testname="Poll until terminal status" enabled="true">
+            <stringProp name="WhileController.condition">${__groovy(!(vars.get('pollDone') ?: 'true').toBoolean())}</stringProp>
+          </WhileController>
+          <hashTree>
+            <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer" testname="Poll interval" enabled="true">
+              <stringProp name="ConstantTimer.delay">${__P(pollIntervalMs,500)}</stringProp>
+            </ConstantTimer>
+            <hashTree/>
+            <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="DOCUMENT_POLL" enabled="true">
+              <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+                <collectionProp name="Arguments.arguments"/>
+              </elementProp>
+              <stringProp name="HTTPSampler.path">/api/knowledge-bases/${__P(knowledgeBaseId,)}/documents/${documentId}</stringProp>
+              <stringProp name="HTTPSampler.method">GET</stringProp>
+              <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+              <boolProp name="HTTPSampler.auto_redirects">false</boolProp>
+              <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+              <boolProp name="HTTPSampler.DO_MULTIPART_POST">false</boolProp>
+              <stringProp name="HTTPSampler.embedded_url_re"/>
+              <stringProp name="HTTPSampler.contentEncoding"/>
+            </HTTPSamplerProxy>
+            <hashTree>
+              <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="Evaluate document status" enabled="true">
+                <stringProp name="scriptLanguage">groovy</stringProp>
+                <stringProp name="parameters"/>
+                <stringProp name="filename"/>
+                <stringProp name="cacheKey">true</stringProp>
+                <stringProp name="script">import groovy.json.JsonSlurper
+
+def attempts = (vars.get('pollAttempts') ?: '0').toInteger() + 1
+vars.put('pollAttempts', attempts.toString())
+def body = null
+try {
+    body = new JsonSlurper().parseText(prev.getResponseDataAsString())
+} catch (Exception ignored) {
+    // The assertions and checks below mark this sample as failed.
+}
+def status = body?.data?.status?.toString() ?: 'UNKNOWN'
+vars.put('documentStatus', status)
+def responseOk = prev.getResponseCode() == '200' &amp;&amp; body?.success == true
+
+if (!responseOk) {
+    vars.put('e2eSuccess', 'false')
+    vars.put('pollDone', 'true')
+    prev.setSuccessful(false)
+} else if (status == 'READY') {
+    vars.put('pollDone', 'true')
+} else if (status == 'FAILED') {
+    vars.put('e2eSuccess', 'false')
+    vars.put('pollDone', 'true')
+    prev.setSuccessful(false)
+    prev.setResponseMessage('Document reached FAILED status')
+} else {
+    def started = (vars.get('iterationStartedMs') ?: '0').toLong()
+    def timeoutMs = props.get('pollTimeoutMs', '120000').toLong()
+    if (System.currentTimeMillis() - started &gt;= timeoutMs) {
+        vars.put('e2eSuccess', 'false')
+        vars.put('pollDone', 'true')
+        prev.setSuccessful(false)
+        prev.setResponseMessage('Document polling timed out; last status=' + status)
+    }
+}</stringProp>
+              </JSR223PostProcessor>
+              <hashTree/>
+              <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Poll HTTP 200" enabled="true">
+                <collectionProp name="Asserion.test_strings">
+                  <stringProp name="3">200</stringProp>
+                </collectionProp>
+                <stringProp name="Assertion.custom_message">Expected document status HTTP 200</stringProp>
+                <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+                <boolProp name="Assertion.assume_success">false</boolProp>
+                <intProp name="Assertion.test_type">8</intProp>
+              </ResponseAssertion>
+              <hashTree/>
+              <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Poll API success" enabled="true">
+                <collectionProp name="Asserion.test_strings">
+                  <stringProp name="4">&quot;success&quot;:true</stringProp>
+                </collectionProp>
+                <stringProp name="Assertion.custom_message">Expected document status response success=true</stringProp>
+                <stringProp name="Assertion.test_field">Assertion.response_data</stringProp>
+                <boolProp name="Assertion.assume_success">false</boolProp>
+                <intProp name="Assertion.test_type">16</intProp>
+              </ResponseAssertion>
+              <hashTree/>
+            </hashTree>
+          </hashTree>
+        </hashTree>
+        </hashTree>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

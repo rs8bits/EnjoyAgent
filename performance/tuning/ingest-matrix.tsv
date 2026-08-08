@@ -1,0 +1,9 @@
+case_id	worker_concurrency	prefetch	embedding_batch_size	note
+baseline-w2-p1-b10	2	1	10	Stage 3 baseline
+worker-w4-p1-b10	4	1	10	Isolate worker scaling to four
+worker-w8-p1-b10	8	1	10	Isolate worker scaling to eight
+prefetch-w4-p2-b10	4	2	10	Balanced worker and broker dispatch
+prefetch-w4-p4-b10	4	4	10	Measure higher unacked-message allowance
+batch-w4-p2-b5	4	2	5	Smaller upstream batches
+batch-w4-p2-b20	4	2	20	Larger but bounded upstream batches
+upper-w8-p4-b20	8	4	20	Upper local pressure bound

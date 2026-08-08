@@ -15,6 +15,8 @@ EnjoyAgent 是一个面向真实业务场景设计的多租户 AI Agent 平台�
 - **真实多租户平台骨架**：用户、租户、成员角色、系统管理员、JWT 鉴权和 `/api/admin/**` 权限边界已经串通。
 - **BYOK + 平台官方模型双轨运行**：用户可以接自己的 OpenAI-compatible/百炼模型，平台也可以托管官方模型、价格和凭证。
 - **完整 RAG 主链路**：文档上传、MinIO 存储、切片、embedding、pgvector、Query Rewrite、Rerank、Elasticsearch 混合检索和检索调试信息。
+- **可恢复的异步文档导入**：RabbitMQ + Transactional Outbox 解耦上传与重处理，具备 processing fence、有限重试、parking queue 和断点恢复。
+- **热点链路两级缓存**：Caffeine L1 + Redis L2，结合 generation fencing、Redisson 分布式锁与跨实例失效广播。
 - **MCP 运行时接入**：支持 MCP Server 管理、工具同步、Agent 工具绑定、工具调用日志、OAuth Auth Code + PKCE、Client Credentials 和 token refresh。
 - **可视化 Workflow 后端能力**：支持工作流、节点、连线持久化，测试运行和执行历史，为可拖拽 Agent Workflow 提供后端编排基础。
 - **钱包与异步 token 计费**：官方模型调用会记录价格快照和 token 快照，通过 RabbitMQ 异步写入钱包流水。
@@ -61,7 +63,7 @@ Auth / Tenant
 - Spring Security + JWT
 - Spring Data JPA
 - PostgreSQL + pgvector
-- Redis
+- Redis + Caffeine + Redisson
 - RabbitMQ
 - MinIO
 - Elasticsearch
@@ -104,6 +106,7 @@ Auth / Tenant
 - MinIO 文件存储
 - 文本抽取与切片
 - Embedding 入库
+- HTTP 202 异步导入、Outbox 可靠投递和失败任务重试
 - pgvector 向量检索
 - Elasticsearch 混合检索
 - Query Rewrite
@@ -166,15 +169,22 @@ MinIO Console   http://localhost:9001
 RabbitMQ        localhost:5672
 RabbitMQ UI     http://localhost:15672
 Elasticsearch   http://localhost:9200
+Prometheus      http://localhost:9090
+Grafana         http://localhost:3000
 ```
 
 ### 2. 准备环境变量
 
 ```bash
 cp .env.example .env
+set -a
+source .env
+set +a
 ```
 
-默认配置已经适配本地 Docker 依赖。你可以按需修改模型网关、官方模型 key、MinIO、RabbitMQ、Elasticsearch 等配置。
+Docker Compose 会自动读取 `.env`，但直接启动的 Spring Boot 进程不会；因此需要先将变量导出到当前 shell。默认配置已经适配本地 Docker 依赖，你可以按需修改模型网关、官方模型 key、MinIO、RabbitMQ、Elasticsearch 等配置。
+
+`.env.example` 中的数据库、RabbitMQ、MinIO、JWT 和 AES 值只适用于本地开发，生产环境必须替换。
 
 ### 3. 启动后端
 
@@ -188,6 +198,50 @@ mvn spring-boot:run
 API      http://localhost:8080
 Swagger  http://localhost:8080/swagger-ui.html
 ```
+
+## 可观测性与性能基线
+
+`compose.yml` 已包含 Prometheus、Grafana、PostgreSQL Exporter、Redis Exporter，并为 RabbitMQ 开启 Prometheus 插件。应用运行后可访问：
+
+```text
+Actuator Health  http://localhost:8080/actuator/health
+Prometheus API   http://localhost:8080/actuator/prometheus
+Prometheus UI    http://localhost:9090
+Grafana          http://localhost:3000
+```
+
+Grafana 会自动加载 `EnjoyAgent Baseline` 仪表盘。正式压测不要使用默认 `local` profile，也不要使用 `mvn spring-boot:run`；先构建一次，再让所有 A/B 组复用同一份 JAR：
+
+```bash
+mvn clean package
+SPRING_PROFILES_ACTIVE=perf \
+java -Xms1g -Xmx1g -XX:+UseG1GC \
+  -jar target/enjoy-agent-0.0.1-SNAPSHOT.jar
+```
+
+HTTP 基线使用 Apache JMeter 5.6.3，并统一通过非 GUI 模式执行。脚本、场景和结果规范见 [performance/jmeter/README.md](performance/jmeter/README.md)，示例：
+
+```bash
+PERF_SCENARIO=auth-me \
+PERF_THREADS=50 \
+PERF_TARGET_RPM=12000 \
+PERF_WARMUP_SECONDS=120 \
+PERF_DURATION_SECONDS=900 \
+./performance/jmeter/run-baseline.sh
+```
+
+每次测试先单独预热，再生成正式测量的 JTL 与 HTML 报告；同时使用 Grafana 对齐查看 HTTP、JWT 成员查询、Hikari、JVM、Redis、RabbitMQ 及文档入库阶段指标。
+
+阶段 4 把构建、基础设施、五类故障演练和异步导入参数矩阵串成一个入口。它会恢复执行前的容器启停状态，不删除数据卷：
+
+```bash
+JMETER_BIN=/absolute/path/to/apache-jmeter-5.6.3/bin/jmeter \
+MAVEN_BIN=/absolute/path/to/mvn \
+./performance/run-stage4.sh all
+```
+
+只运行单项时，把 `all` 换成 `faults` 或 `tuning`。故障演练、参数矩阵与指标解释分别见
+[fault-injection](performance/fault-injection/README.md) 和 [tuning](performance/tuning/README.md)。
 
 ## 推荐联调顺序
 
@@ -216,6 +270,9 @@ Swagger  http://localhost:8080/swagger-ui.html
 
 - [Agent.md](./Agent.md)：架构说明、核心设计取舍和协作原则
 - [Plan.md](./Plan.md)：后续路线图和工程化优先级
+- [缓存与异步导入可靠性架构](docs/architecture/reliability-and-performance.md)：一致性边界、状态机与调优参数
+- [阶段 2/3 性能报告](docs/performance/stage2-stage3-report.md)：三轮 JMeter A/B 数据与测试边界
+- [阶段 4 故障与调优报告](docs/performance/stage4-report.md)：故障演练证据与参数矩阵结论
 
 ## 适合谁看
 

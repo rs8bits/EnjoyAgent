@@ -60,6 +60,8 @@ spring:
 
 # 日志级别配置
 logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] [request=%X{requestId:-}] [tenant=%X{tenantId:-}] %logger{36} - %msg%n"
   level:
     com.enjoy.agent: INFO
     org.springframework.security: INFO
@@ -167,3 +169,22 @@ springdoc:
     try-it-out-enabled: true
     persist-authorization: true
     display-request-duration: true
+
+# Actuator 与 Prometheus。只在 SecurityConfig 中匿名放行 health 和 prometheus。
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 10ms,25ms,50ms,100ms,250ms,500ms,1s,2s,5s

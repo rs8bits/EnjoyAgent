@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "run_id": "fi_20260808T085128Z_37612",
+  "overall": "PASS",
+  "passed_scenarios": 5,
+  "total_scenarios": 5,
+  "jar_sha256": "7d81a182cead856933635eddf2b69d60b9fdc4104dd346727c398e519adf960f",
+  "fixture_sha256": "1aeca7128d93552ed525b68e29b973b90c2dbaed4c4fc218c9d47e7bb1599562",
+  "scenarios": {
+    "cache_cross_instance": {
+      "outcome": "PASS",
+      "convergence_ms": 60,
+      "l1_ttl_ms": 30000
+    },
+    "redis_outage": {
+      "outcome": "PASS",
+      "http_status_during_outage": 200,
+      "request_seconds_during_outage": 0.014510,
+      "request_seconds_after_recovery": 0.016957,
+      "l2_error_count": 2,
+      "previous_jar_request_seconds": 9.860105,
+      "latency_reduction_percent": 99.853
+    },
+    "rabbitmq_outage": {
+      "outcome": "PASS",
+      "upload_http_status": 202,
+      "upload_seconds": 0.129665,
+      "outbox_publish_attempts": 9,
+      "final_document_status": "READY"
+    },
+    "worker_sigkill": {
+      "outcome": "PASS",
+      "fence_before": 1,
+      "fence_after": 2,
+      "logical_attempts": 1,
+      "final_chunk_count": 94,
+      "final_document_status": "READY"
+    },
+    "embedding_timeout": {
+      "outcome": "PASS",
+      "injected_http_status": 408,
+      "automatic_attempts": 3,
+      "parking_messages_ready": 1,
+      "manual_recovery_attempt": 4,
+      "final_chunk_count": 94,
+      "final_document_status": "READY"
+    }
+  },
+  "cleanup": {
+    "pending_or_claimed_outbox": 0,
+    "dedicated_rabbitmq_topology_deleted": true,
+    "ports_released": [18081, 18082, 18083]
+  }
+}

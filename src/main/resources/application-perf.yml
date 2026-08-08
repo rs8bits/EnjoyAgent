@@ -1,0 +1,44 @@
+# 可复现压测专用配置。通过 SPRING_PROFILES_ACTIVE=perf 启用，避免 local 的 SQL/DEBUG 日志污染结果。
+spring:
+  data:
+    redis:
+      repositories:
+        enabled: false
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+        generate_statistics: ${APP_HIBERNATE_STATISTICS:true}
+  rabbitmq:
+    listener:
+      simple:
+        observation-enabled: true
+    template:
+      observation-enabled: true
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+logging:
+  level:
+    com.enjoy.agent: INFO
+    org.hibernate.SQL: WARN
+    org.hibernate.stat: WARN
+    org.hibernate.engine.internal.StatisticalLoggingSessionEventListener: "OFF"
+    org.springframework.security: WARN
+
+enjoy:
+  cache:
+    agent-config-local-enabled: ${APP_CACHE_AGENT_CONFIG_LOCAL_ENABLED:true}
+    agent-config-distributed-lock-enabled: ${APP_CACHE_AGENT_CONFIG_LOCK_ENABLED:true}
+    auth-context-enabled: ${APP_CACHE_AUTH_CONTEXT_ENABLED:true}
+    auth-context-local-enabled: ${APP_CACHE_AUTH_CONTEXT_LOCAL_ENABLED:true}
+  knowledge:
+    ingest:
+      worker-concurrency: ${APP_KNOWLEDGE_INGEST_WORKER_CONCURRENCY:4}
+      prefetch: ${APP_KNOWLEDGE_INGEST_PREFETCH:2}
+      outbox-batch-size: ${APP_KNOWLEDGE_INGEST_OUTBOX_BATCH_SIZE:50}
