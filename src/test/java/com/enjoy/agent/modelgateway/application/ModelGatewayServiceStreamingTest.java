@@ -103,7 +103,12 @@ class ModelGatewayServiceStreamingTest {
                         null,
                         null,
                         BigDecimal.valueOf(0.2),
-                        512
+                        512,
+                        null,
+                        "http://127.0.0.1:" + server.getAddress().getPort(),
+                        null,
+                        null,
+                        null
                 ),
                 null,
                 List.of(),
