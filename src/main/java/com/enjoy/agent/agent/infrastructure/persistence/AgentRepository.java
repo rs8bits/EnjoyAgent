@@ -19,8 +19,18 @@ public interface AgentRepository extends JpaRepository<Agent, Long> {
     @EntityGraph(attributePaths = {"tenant", "modelConfig", "knowledgeBase", "rerankModelConfig"})
     List<Agent> findAllByTenant_IdOrderByIdDesc(Long tenantId);
 
-    @EntityGraph(attributePaths = {"tenant", "modelConfig", "knowledgeBase", "rerankModelConfig"})
+    @EntityGraph(attributePaths = {
+            "tenant", "modelConfig", "officialModelConfig", "knowledgeBase", "workflow", "rerankModelConfig"
+    })
     Page<Agent> findAllByTenant_Id(Long tenantId, Pageable pageable);
+
+    /**
+     * 按名称搜索当前租户下的 Agent，仍由数据库分页，避免选择器全量加载。
+     */
+    @EntityGraph(attributePaths = {
+            "tenant", "modelConfig", "officialModelConfig", "knowledgeBase", "workflow", "rerankModelConfig"
+    })
+    Page<Agent> findAllByTenant_IdAndNameContainingIgnoreCase(Long tenantId, String name, Pageable pageable);
 
     /**
      * 按 ID 和租户查询 Agent，防止跨租户访问。
@@ -51,6 +61,8 @@ public interface AgentRepository extends JpaRepository<Agent, Long> {
      * 判断是否还有 Agent 正在使用某个知识库。
      */
     boolean existsByKnowledgeBase_Id(Long knowledgeBaseId);
+
+    boolean existsByOfficialModelConfig_Id(Long officialModelConfigId);
 
     Optional<Agent> findFirstByWorkflow_IdAndTenant_IdOrderByIdAsc(Long workflowId, Long tenantId);
 }

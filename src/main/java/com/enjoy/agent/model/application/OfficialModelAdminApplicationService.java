@@ -1,6 +1,11 @@
 package com.enjoy.agent.model.application;
 
+import com.enjoy.agent.agent.infrastructure.persistence.AgentRepository;
 import com.enjoy.agent.auth.domain.enums.SystemRole;
+import com.enjoy.agent.billing.application.BillingCurrency;
+import com.enjoy.agent.billing.application.BillingProperties;
+import com.enjoy.agent.billing.infrastructure.persistence.BillingCreditReservationRepository;
+import com.enjoy.agent.billing.infrastructure.persistence.BillingUsageEventRepository;
 import com.enjoy.agent.credential.domain.enums.CredentialProvider;
 import com.enjoy.agent.model.api.request.CreateOfficialModelConfigRequest;
 import com.enjoy.agent.model.api.request.CreateOfficialModelCredentialRequest;
@@ -17,6 +22,8 @@ import com.enjoy.agent.shared.crypto.AesCryptoService;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
+import com.enjoy.agent.shared.security.OutboundUrlPolicy;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -28,16 +35,31 @@ public class OfficialModelAdminApplicationService {
 
     private final OfficialModelCredentialRepository officialModelCredentialRepository;
     private final OfficialModelConfigRepository officialModelConfigRepository;
+    private final AgentRepository agentRepository;
+    private final BillingCreditReservationRepository billingCreditReservationRepository;
+    private final BillingUsageEventRepository billingUsageEventRepository;
+    private final BillingProperties billingProperties;
     private final AesCryptoService aesCryptoService;
+    private final OutboundUrlPolicy outboundUrlPolicy;
 
     public OfficialModelAdminApplicationService(
             OfficialModelCredentialRepository officialModelCredentialRepository,
             OfficialModelConfigRepository officialModelConfigRepository,
-            AesCryptoService aesCryptoService
+            AgentRepository agentRepository,
+            BillingCreditReservationRepository billingCreditReservationRepository,
+            BillingUsageEventRepository billingUsageEventRepository,
+            BillingProperties billingProperties,
+            AesCryptoService aesCryptoService,
+            OutboundUrlPolicy outboundUrlPolicy
     ) {
         this.officialModelCredentialRepository = officialModelCredentialRepository;
         this.officialModelConfigRepository = officialModelConfigRepository;
+        this.agentRepository = agentRepository;
+        this.billingCreditReservationRepository = billingCreditReservationRepository;
+        this.billingUsageEventRepository = billingUsageEventRepository;
+        this.billingProperties = billingProperties;
         this.aesCryptoService = aesCryptoService;
+        this.outboundUrlPolicy = outboundUrlPolicy;
     }
 
     @Transactional
@@ -94,12 +116,23 @@ public class OfficialModelAdminApplicationService {
     @Transactional
     public void deleteCredential(Long id) {
         requireAdmin();
-        officialModelCredentialRepository.delete(requireCredential(id));
+        OfficialModelCredential credential = requireCredential(id);
+        if (officialModelConfigRepository.existsByOfficialCredential_Id(id)) {
+            throw credentialInUse();
+        }
+        try {
+            officialModelCredentialRepository.delete(credential);
+            officialModelCredentialRepository.flush();
+        } catch (DataIntegrityViolationException ex) {
+            // A config may have been created after the explicit dependency check.
+            throw credentialInUse();
+        }
     }
 
     @Transactional
     public OfficialModelConfigResponse createConfig(CreateOfficialModelConfigRequest request) {
         requireAdmin();
+        String currency = requirePlatformBillingCurrency(request.currency());
         String normalizedName = normalizeName(request.name());
         if (officialModelConfigRepository.existsByName(normalizedName)) {
             throw new ApiException("OFFICIAL_MODEL_CONFIG_NAME_DUPLICATED", "Official model config name already exists", HttpStatus.CONFLICT);
@@ -115,10 +148,10 @@ public class OfficialModelAdminApplicationService {
         config.setModelName(normalizeModelName(request.modelName()));
         config.setOfficialCredential(credential);
         config.setTemperature(request.temperature());
-        config.setMaxTokens(request.maxTokens());
+        config.setMaxTokens(requireBoundedChatMaxTokens(request.modelType(), request.maxTokens()));
         config.setInputPricePerMillion(request.inputPricePerMillion());
         config.setOutputPricePerMillion(request.outputPricePerMillion());
-        config.setCurrency(normalizeCurrency(request.currency()));
+        config.setCurrency(currency);
         config.setDescription(normalizeDescription(request.description()));
         config.setEnabled(request.enabled() == null || request.enabled());
         return toConfigResponse(officialModelConfigRepository.saveAndFlush(config));
@@ -140,6 +173,7 @@ public class OfficialModelAdminApplicationService {
     @Transactional
     public OfficialModelConfigResponse updateConfig(Long id, UpdateOfficialModelConfigRequest request) {
         requireAdmin();
+        String currency = requirePlatformBillingCurrency(request.currency());
         OfficialModelConfig config = requireConfig(id);
         String normalizedName = normalizeName(request.name());
         if (officialModelConfigRepository.existsByNameAndIdNot(normalizedName, id)) {
@@ -155,10 +189,10 @@ public class OfficialModelAdminApplicationService {
         config.setModelName(normalizeModelName(request.modelName()));
         config.setOfficialCredential(credential);
         config.setTemperature(request.temperature());
-        config.setMaxTokens(request.maxTokens());
+        config.setMaxTokens(requireBoundedChatMaxTokens(request.modelType(), request.maxTokens()));
         config.setInputPricePerMillion(request.inputPricePerMillion());
         config.setOutputPricePerMillion(request.outputPricePerMillion());
-        config.setCurrency(normalizeCurrency(request.currency()));
+        config.setCurrency(currency);
         config.setDescription(normalizeDescription(request.description()));
         config.setEnabled(request.enabled());
         return toConfigResponse(officialModelConfigRepository.saveAndFlush(config));
@@ -167,7 +201,19 @@ public class OfficialModelAdminApplicationService {
     @Transactional
     public void deleteConfig(Long id) {
         requireAdmin();
-        officialModelConfigRepository.delete(requireConfig(id));
+        OfficialModelConfig config = requireConfig(id);
+        if (agentRepository.existsByOfficialModelConfig_Id(id)
+                || billingCreditReservationRepository.existsByOfficialModelConfigId(id)
+                || billingUsageEventRepository.existsByOfficialModelConfigId(id)) {
+            throw configInUse();
+        }
+        try {
+            officialModelConfigRepository.delete(config);
+            officialModelConfigRepository.flush();
+        } catch (DataIntegrityViolationException ex) {
+            // Protect the API contract from a concurrent dependency inserted after the checks.
+            throw configInUse();
+        }
     }
 
     @Transactional(readOnly = true)
@@ -185,6 +231,17 @@ public class OfficialModelAdminApplicationService {
         if (currentUser.systemRole() != SystemRole.ADMIN) {
             throw new ApiException("FORBIDDEN", "Admin permission required", HttpStatus.FORBIDDEN);
         }
+    }
+
+    private Integer requireBoundedChatMaxTokens(ModelType modelType, Integer maxTokens) {
+        if (modelType == ModelType.CHAT && maxTokens == null) {
+            throw new ApiException(
+                    "OFFICIAL_MODEL_MAX_TOKENS_REQUIRED",
+                    "Official chat models must define maxTokens so billing reservation and provider limits match",
+                    HttpStatus.BAD_REQUEST
+            );
+        }
+        return maxTokens;
     }
 
     private OfficialModelCredential requireCredential(Long id) {
@@ -248,8 +305,8 @@ public class OfficialModelAdminApplicationService {
                 config.getOfficialCredential().getName(),
                 config.getTemperature(),
                 config.getMaxTokens(),
-                config.getInputPricePerMillion(),
-                config.getOutputPricePerMillion(),
+                decimalString(config.getInputPricePerMillion()),
+                decimalString(config.getOutputPricePerMillion()),
                 config.getCurrency(),
                 config.getDescription(),
                 config.isEnabled(),
@@ -273,15 +330,47 @@ public class OfficialModelAdminApplicationService {
         return value.trim();
     }
 
-    private String normalizeCurrency(String value) {
-        return value == null ? null : value.trim().toUpperCase();
+    private String requirePlatformBillingCurrency(String value) {
+        String currency = BillingCurrency.normalize(value);
+        String platformCurrency = BillingCurrency.normalize(billingProperties.getCurrency());
+        if (!BillingCurrency.matches(currency, platformCurrency)) {
+            throw new ApiException(
+                    "OFFICIAL_MODEL_CURRENCY_MISMATCH",
+                    "Official model currency must match the platform billing currency; currency conversion is not supported",
+                    HttpStatus.BAD_REQUEST
+            );
+        }
+        return currency;
+    }
+
+    private ApiException credentialInUse() {
+        return new ApiException(
+                "OFFICIAL_MODEL_CREDENTIAL_IN_USE",
+                "Official model credential is in use by an official model config",
+                HttpStatus.CONFLICT
+        );
+    }
+
+    private ApiException configInUse() {
+        return new ApiException(
+                "OFFICIAL_MODEL_CONFIG_IN_USE",
+                "Official model config is in use by an agent or billing record",
+                HttpStatus.CONFLICT
+        );
+    }
+
+    private String decimalString(java.math.BigDecimal value) {
+        return value == null ? null : value.toPlainString();
     }
 
     private String normalizeBaseUrl(String value) {
         if (value == null) {
             return null;
         }
-        String normalized = value.trim();
+        String normalized = outboundUrlPolicy.requireAllowedHttpUrl(
+                value,
+                "OFFICIAL_MODEL_BASE_URL_INVALID"
+        ).toString();
         if (normalized.endsWith("/")) {
             normalized = normalized.substring(0, normalized.length() - 1);
         }

@@ -15,6 +15,7 @@ import com.enjoy.agent.shared.crypto.CredentialMaskingUtils;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
+import com.enjoy.agent.shared.security.OutboundUrlPolicy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -31,17 +32,20 @@ public class CredentialApplicationService {
     private final AppUserRepository appUserRepository;
     private final ModelConfigRepository modelConfigRepository;
     private final AesCryptoService aesCryptoService;
+    private final OutboundUrlPolicy outboundUrlPolicy;
 
     public CredentialApplicationService(
             CredentialRepository credentialRepository,
             AppUserRepository appUserRepository,
             ModelConfigRepository modelConfigRepository,
-            AesCryptoService aesCryptoService
+            AesCryptoService aesCryptoService,
+            OutboundUrlPolicy outboundUrlPolicy
     ) {
         this.credentialRepository = credentialRepository;
         this.appUserRepository = appUserRepository;
         this.modelConfigRepository = modelConfigRepository;
         this.aesCryptoService = aesCryptoService;
+        this.outboundUrlPolicy = outboundUrlPolicy;
     }
 
     /**
@@ -184,10 +188,8 @@ public class CredentialApplicationService {
         if (baseUrl == null || baseUrl.isBlank()) {
             return provider == null ? null : provider.defaultCompatibleBaseUrl();
         }
-        String normalized = baseUrl.trim();
-        if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) {
-            throw new ApiException("CREDENTIAL_BASE_URL_INVALID", "Credential baseUrl must start with http:// or https://", HttpStatus.BAD_REQUEST);
-        }
+        String normalized = outboundUrlPolicy.requireAllowedHttpUrl(
+                baseUrl, "CREDENTIAL_BASE_URL_INVALID").toString();
         while (normalized.endsWith("/")) {
             normalized = normalized.substring(0, normalized.length() - 1);
         }

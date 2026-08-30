@@ -16,6 +16,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -54,6 +55,7 @@ public class KnowledgeBaseController {
      */
     @Operation(summary = "创建知识库", description = "在当前租户下创建一个绑定 embedding 模型的知识库")
     @PostMapping
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<KnowledgeBaseResponse> createKnowledgeBase(@Valid @org.springframework.web.bind.annotation.RequestBody CreateKnowledgeBaseRequest request) {
         return ApiResponse.success(knowledgeBaseApplicationService.createKnowledgeBase(request), "Knowledge base created");
     }
@@ -81,6 +83,7 @@ public class KnowledgeBaseController {
      */
     @Operation(summary = "更新知识库", description = "更新知识库名称、描述、embedding 模型配置和启用状态")
     @PutMapping("/{id}")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<KnowledgeBaseResponse> updateKnowledgeBase(
             @PathVariable Long id,
             @Valid @org.springframework.web.bind.annotation.RequestBody UpdateKnowledgeBaseRequest request
@@ -93,6 +96,7 @@ public class KnowledgeBaseController {
      */
     @Operation(summary = "删除知识库", description = "删除一个空的、未被 Agent 绑定的知识库")
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<Void> deleteKnowledgeBase(@PathVariable Long id) {
         knowledgeBaseApplicationService.deleteKnowledgeBase(id);
         return ApiResponse.success(null, "Knowledge base deleted");
@@ -113,6 +117,7 @@ public class KnowledgeBaseController {
             )
     )
     @PostMapping(value = "/{id}/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasRole('OWNER')")
     public ResponseEntity<ApiResponse<KnowledgeDocumentResponse>> uploadDocument(
             @PathVariable Long id,
             @RequestPart("file") MultipartFile file
@@ -149,6 +154,7 @@ public class KnowledgeBaseController {
 
     @Operation(summary = "重试失败文档", description = "为 FAILED 文档创建新一轮可靠异步导入任务")
     @PostMapping("/{id}/documents/{documentId}/retry")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<KnowledgeDocumentResponse> retryDocument(
             @PathVariable Long id,
             @PathVariable Long documentId
@@ -164,6 +170,7 @@ public class KnowledgeBaseController {
      */
     @Operation(summary = "删除文档", description = "删除知识库文档、对应切片与 MinIO 对象")
     @DeleteMapping("/{id}/documents/{documentId}")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<Void> deleteDocument(
             @PathVariable Long id,
             @PathVariable Long documentId
@@ -177,6 +184,7 @@ public class KnowledgeBaseController {
      */
     @Operation(summary = "重建文档检索索引", description = "把 READY 文档的现有切片重新同步到 Elasticsearch 检索索引")
     @PostMapping("/{id}/documents/{documentId}/reindex-search")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<KnowledgeDocumentResponse> reindexDocument(
             @PathVariable Long id,
             @PathVariable Long documentId

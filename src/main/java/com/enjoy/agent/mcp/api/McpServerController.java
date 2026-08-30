@@ -16,6 +16,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.util.List;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -50,6 +51,7 @@ public class McpServerController {
 
     @Operation(summary = "创建 MCP Server", description = "在当前租户下创建一个 MCP Server 配置")
     @PostMapping
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<McpServerResponse> createServer(@Valid @RequestBody CreateMcpServerRequest request) {
         return ApiResponse.success(mcpServerApplicationService.createServer(request), "MCP server created");
     }
@@ -68,6 +70,7 @@ public class McpServerController {
 
     @Operation(summary = "更新 MCP Server", description = "更新 MCP Server 的名称、地址、凭证和启用状态")
     @PutMapping("/{id}")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<McpServerResponse> updateServer(
             @PathVariable Long id,
             @Valid @RequestBody UpdateMcpServerRequest request
@@ -77,6 +80,7 @@ public class McpServerController {
 
     @Operation(summary = "删除 MCP Server", description = "删除 MCP Server，并级联清理该 Server 下的工具目录和 Agent 绑定关系")
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<Void> deleteServer(@PathVariable Long id) {
         mcpServerApplicationService.deleteServer(id);
         return ApiResponse.success(null, "MCP server deleted");
@@ -84,6 +88,7 @@ public class McpServerController {
 
     @Operation(summary = "替换工具目录", description = "用一份完整工具快照替换某个 MCP Server 当前的工具目录")
     @PutMapping("/{id}/tools")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<List<McpToolResponse>> replaceServerTools(
             @PathVariable Long id,
             @Valid @RequestBody ReplaceMcpServerToolsRequest request
@@ -93,6 +98,7 @@ public class McpServerController {
 
     @Operation(summary = "从远端同步工具目录", description = "通过 MCP tools/list 从远端 Server 拉取最新工具目录并替换本地快照")
     @PostMapping("/{id}/sync-tools")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<List<McpToolResponse>> syncServerTools(@PathVariable Long id) {
         return ApiResponse.success(mcpRuntimeService.syncToolsFromServer(id), "MCP tools synchronized from remote server");
     }

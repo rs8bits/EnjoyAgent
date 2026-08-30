@@ -36,17 +36,20 @@ public class AdminBillingApplicationService {
     private final AppUserRepository appUserRepository;
     private final RechargeOrderRepository rechargeOrderRepository;
     private final WalletSupportService walletSupportService;
+    private final BillingUsageApplicationService billingUsageApplicationService;
     private final Clock clock;
 
     public AdminBillingApplicationService(
             AppUserRepository appUserRepository,
             RechargeOrderRepository rechargeOrderRepository,
             WalletSupportService walletSupportService,
+            BillingUsageApplicationService billingUsageApplicationService,
             Clock clock
     ) {
         this.appUserRepository = appUserRepository;
         this.rechargeOrderRepository = rechargeOrderRepository;
         this.walletSupportService = walletSupportService;
+        this.billingUsageApplicationService = billingUsageApplicationService;
         this.clock = clock;
     }
 
@@ -68,7 +71,7 @@ public class AdminBillingApplicationService {
         UserWallet wallet = walletSupportService.loadOrCreateWalletForUpdate(order.getUser().getId());
         requireWalletActive(wallet);
 
-        wallet.setBalance(wallet.getBalance().add(order.getAmount()));
+        wallet.setBalance(BillingMoney.add(wallet.getBalance(), order.getAmount()));
         walletSupportService.createTransaction(
                 wallet,
                 UserWalletTransactionType.RECHARGE_APPROVED,
@@ -112,7 +115,16 @@ public class AdminBillingApplicationService {
 
         UserWallet wallet = walletSupportService.loadOrCreateWalletForUpdate(userId);
         requireWalletActive(wallet);
-        wallet.setBalance(wallet.getBalance().add(amountDelta));
+        BigDecimal adjustedBalance = BillingMoney.add(wallet.getBalance(), amountDelta);
+        BigDecimal reservedAmount = wallet.getReservedAmount() == null ? BigDecimal.ZERO : wallet.getReservedAmount();
+        if (adjustedBalance.signum() < 0 || adjustedBalance.compareTo(reservedAmount) < 0) {
+            throw new ApiException(
+                    "WALLET_ADJUST_BALANCE_RESERVED",
+                    "Wallet adjustment cannot reduce balance below reserved credit",
+                    HttpStatus.CONFLICT
+            );
+        }
+        wallet.setBalance(adjustedBalance);
         walletSupportService.createTransaction(
                 wallet,
                 UserWalletTransactionType.MANUAL_ADJUST,
@@ -124,8 +136,20 @@ public class AdminBillingApplicationService {
         return walletSupportService.toWalletResponse(wallet);
     }
 
+    @Transactional
+    public void replayFailedUsageEvent(Long eventId) {
+        requireAdmin();
+        billingUsageApplicationService.replayFailedUsageEvent(eventId);
+    }
+
+    @Transactional
+    public void abandonFailedUsageEvent(Long eventId) {
+        requireAdmin();
+        billingUsageApplicationService.abandonFailedUsageEvent(eventId);
+    }
+
     private RechargeOrder requirePendingRechargeOrder(Long id) {
-        RechargeOrder order = rechargeOrderRepository.findById(id)
+        RechargeOrder order = rechargeOrderRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> new ApiException("RECHARGE_ORDER_NOT_FOUND", "Recharge order not found", HttpStatus.NOT_FOUND));
         if (order.getStatus() != RechargeOrderStatus.PENDING) {
             throw new ApiException("RECHARGE_ORDER_STATUS_INVALID", "Recharge order is not pending", HttpStatus.BAD_REQUEST);

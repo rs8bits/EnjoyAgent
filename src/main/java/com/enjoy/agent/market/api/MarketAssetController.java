@@ -13,6 +13,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -35,6 +36,7 @@ public class MarketAssetController {
 
     @Operation(summary = "提交 Agent 到共享市场")
     @PostMapping("/assets/agents/{agentId}/submit")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<MarketAssetResponse> submitAgentAsset(
             @PathVariable Long agentId,
             @Valid @RequestBody SubmitMarketAssetRequest request
@@ -44,6 +46,7 @@ public class MarketAssetController {
 
     @Operation(summary = "提交知识库到共享市场")
     @PostMapping("/assets/knowledge-bases/{knowledgeBaseId}/submit")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<MarketAssetResponse> submitKnowledgeBaseAsset(
             @PathVariable Long knowledgeBaseId,
             @Valid @RequestBody SubmitMarketAssetRequest request
@@ -53,6 +56,7 @@ public class MarketAssetController {
 
     @Operation(summary = "提交 MCP Server 到共享市场")
     @PostMapping("/assets/mcp-servers/{serverId}/submit")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<MarketAssetResponse> submitMcpServerAsset(
             @PathVariable Long serverId,
             @Valid @RequestBody SubmitMarketAssetRequest request
@@ -62,6 +66,7 @@ public class MarketAssetController {
 
     @Operation(summary = "提交工作流到市场")
     @PostMapping("/assets/workflows/{workflowId}/submit")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<MarketAssetResponse> submitWorkflowAsset(
             @PathVariable Long workflowId,
             @Valid @RequestBody SubmitMarketAssetRequest request
@@ -92,6 +97,7 @@ public class MarketAssetController {
 
     @Operation(summary = "安装市场资产")
     @PostMapping("/assets/{id}/install")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<MarketAssetInstallResponse> installAsset(
             @PathVariable Long id,
             @Valid @RequestBody InstallMarketAssetRequest request

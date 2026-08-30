@@ -16,8 +16,10 @@ import com.enjoy.agent.mcp.infrastructure.persistence.McpToolRepository;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
+import com.enjoy.agent.shared.security.OutboundUrlPolicy;
 import com.enjoy.agent.tenant.domain.entity.Tenant;
 import com.enjoy.agent.tenant.domain.enums.TenantStatus;
+import com.enjoy.agent.tenant.domain.enums.TenantMemberRole;
 import com.enjoy.agent.tenant.infrastructure.persistence.TenantRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -37,6 +39,7 @@ public class McpServerApplicationService {
     private final TenantRepository tenantRepository;
     private final CredentialRepository credentialRepository;
     private final McpOAuthConnectionRepository mcpOAuthConnectionRepository;
+    private final OutboundUrlPolicy outboundUrlPolicy;
 
     public McpServerApplicationService(
             McpServerRepository mcpServerRepository,
@@ -44,7 +47,8 @@ public class McpServerApplicationService {
             AgentMcpToolBindingRepository agentMcpToolBindingRepository,
             TenantRepository tenantRepository,
             CredentialRepository credentialRepository,
-            McpOAuthConnectionRepository mcpOAuthConnectionRepository
+            McpOAuthConnectionRepository mcpOAuthConnectionRepository,
+            OutboundUrlPolicy outboundUrlPolicy
     ) {
         this.mcpServerRepository = mcpServerRepository;
         this.mcpToolRepository = mcpToolRepository;
@@ -52,6 +56,7 @@ public class McpServerApplicationService {
         this.tenantRepository = tenantRepository;
         this.credentialRepository = credentialRepository;
         this.mcpOAuthConnectionRepository = mcpOAuthConnectionRepository;
+        this.outboundUrlPolicy = outboundUrlPolicy;
     }
 
     /**
@@ -60,6 +65,7 @@ public class McpServerApplicationService {
     @Transactional
     public McpServerResponse createServer(CreateMcpServerRequest request) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
+        requireOwner(currentUser);
         Long tenantId = currentUser.tenantId();
         String normalizedName = normalizeName(request.name());
 
@@ -104,6 +110,7 @@ public class McpServerApplicationService {
     @Transactional
     public McpServerResponse updateServer(Long id, UpdateMcpServerRequest request) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
+        requireOwner(currentUser);
         McpServer server = requireTenantOwnedServer(id);
         String normalizedName = normalizeName(request.name());
         String normalizedBaseUrl = normalizeBaseUrl(request.baseUrl());
@@ -135,6 +142,7 @@ public class McpServerApplicationService {
      */
     @Transactional
     public void deleteServer(Long id) {
+        requireOwner(CurrentUserContext.requireCurrentUser());
         McpServer server = requireTenantOwnedServer(id);
         mcpOAuthConnectionRepository.deleteByServer_Id(id);
         agentMcpToolBindingRepository.deleteAllByTool_Server_Id(id);
@@ -261,13 +269,18 @@ public class McpServerApplicationService {
         if (baseUrl == null) {
             return null;
         }
-        String normalized = baseUrl.trim();
+        String normalized = outboundUrlPolicy.requireAllowedHttpUrl(
+                baseUrl, "MCP_SERVER_BASE_URL_INVALID").toString();
         while (normalized.endsWith("/")) {
             normalized = normalized.substring(0, normalized.length() - 1);
         }
-        if (!(normalized.startsWith("http://") || normalized.startsWith("https://"))) {
-            throw new ApiException("MCP_SERVER_BASE_URL_INVALID", "MCP server baseUrl must start with http:// or https://", HttpStatus.BAD_REQUEST);
-        }
         return normalized;
+    }
+
+    private void requireOwner(AuthenticatedUser user) {
+        if (user.role() != TenantMemberRole.OWNER) {
+            throw new ApiException("TENANT_OWNER_REQUIRED",
+                    "Only tenant owners can modify MCP server configuration", HttpStatus.FORBIDDEN);
+        }
     }
 }

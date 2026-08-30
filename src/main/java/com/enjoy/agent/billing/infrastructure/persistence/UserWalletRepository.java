@@ -15,4 +15,7 @@ public interface UserWalletRepository extends JpaRepository<UserWallet, Long> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select wallet from UserWallet wallet where wallet.user.id = :userId")
     Optional<UserWallet> findByUserIdForUpdate(@Param("userId") Long userId);
+
+    @Query(value = "SELECT id FROM app_user WHERE id = :userId FOR UPDATE", nativeQuery = true)
+    Optional<Long> lockUserForWalletCreation(@Param("userId") Long userId);
 }

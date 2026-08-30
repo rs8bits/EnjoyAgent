@@ -7,7 +7,11 @@ import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.Cache;
@@ -38,8 +42,11 @@ public final class TwoLevelCache implements Cache, AutoCloseable {
     private final CacheInvalidationBus invalidationBus;
     private final CacheInvalidationBus.Subscription subscription;
     private final CacheMetrics metrics;
+    private final ScheduledExecutorService invalidationRetryExecutor;
     private final AtomicLong localClearEpoch = new AtomicLong();
-    private final ConcurrentMap<Object, AtomicLong> localKeyEpochs = new ConcurrentHashMap<>();
+    private final AtomicLong invalidationSequence = new AtomicLong();
+    private final ConcurrentMap<Object, PendingInvalidation> pendingKeyInvalidations = new ConcurrentHashMap<>();
+    private final AtomicReference<PendingInvalidation> pendingClearInvalidation = new AtomicReference<>();
 
     public TwoLevelCache(
             String name,
@@ -88,6 +95,14 @@ public final class TwoLevelCache implements Cache, AutoCloseable {
         this.invalidationBus = Objects.requireNonNull(invalidationBus, "invalidationBus");
         this.metrics = new CacheMetrics(Objects.requireNonNull(meterRegistry, "meterRegistry"), name);
         this.subscription = invalidationBus.subscribe(name, this::onRemoteInvalidation);
+        this.invalidationRetryExecutor = Executors.newSingleThreadScheduledExecutor(runnable ->
+                Thread.ofPlatform().daemon().name("cache-invalidation-retry-" + name).unstarted(runnable));
+        this.invalidationRetryExecutor.scheduleWithFixedDelay(
+                this::retryPendingInvalidations,
+                1,
+                1,
+                TimeUnit.SECONDS
+        );
     }
 
     @Override
@@ -131,7 +146,7 @@ public final class TwoLevelCache implements Cache, AutoCloseable {
             throw new IllegalStateException(
                     "Cached value is not of required type [" + type.getName() + "]: " + value);
         }
-        return type == null ? (T) value : type.cast(value);
+        return type == null ? uncheckedCast(value) : type.cast(value);
     }
 
     @Override
@@ -406,53 +421,132 @@ public final class TwoLevelCache implements Cache, AutoCloseable {
 
     private void invalidateKey(Object key, boolean publish) {
         GenerationLookup previousGeneration = generation(key);
-        advanceKeyGeneration(key);
-        bumpLocalKeyEpoch(key);
-        try {
-            if (previousGeneration.available()) {
-                remoteCache.evict(remoteKey(key, previousGeneration.generation()));
-            }
-        } catch (RuntimeException ex) {
-            metrics.remoteError.increment();
-            log.warn("L2 cache eviction failed, cache={}, reason={}", name, ex.toString());
-        }
-        if (publish) {
-            publishInvalidation(String.valueOf(key));
+        long sequence = invalidationSequence.incrementAndGet();
+        boolean generationAdvanced = advanceKeyGeneration(key);
+        // Agent mutations are rare compared with reads. A process-wide L1 epoch avoids
+        // retaining one epoch counter for every key ever invalidated while the L2
+        // generation remains key-scoped.
+        localClearEpoch.incrementAndGet();
+        boolean remoteInvalidated = generationStore.isEnabled()
+                || evictRemoteKey(key, previousGeneration);
+        boolean published = !publish
+                || (generationAdvanced && remoteInvalidated && publishInvalidation(String.valueOf(key)));
+        PendingInvalidation pending = new PendingInvalidation(
+                sequence,
+                key,
+                false,
+                publish,
+                generationAdvanced,
+                remoteInvalidated,
+                published
+        );
+        if (pending.complete()) {
+            pendingKeyInvalidations.remove(key);
+        } else {
+            pendingKeyInvalidations.put(key, pending);
         }
     }
 
     private void invalidateAll(boolean publish) {
-        advanceAllGeneration();
+        long sequence = invalidationSequence.incrementAndGet();
+        boolean generationAdvanced = advanceAllGeneration();
         localClearEpoch.incrementAndGet();
-        if (!generationStore.isEnabled()) {
-            try {
-                remoteCache.clear();
-            } catch (RuntimeException ex) {
-                metrics.remoteError.increment();
-                log.warn("L2 cache clear failed, cache={}, reason={}", name, ex.toString());
-            }
-        }
-        if (publish) {
-            publishInvalidation(CLEAR_ALL_MESSAGE);
+        boolean remoteInvalidated = generationStore.isEnabled() || clearRemote();
+        boolean published = !publish
+                || (generationAdvanced && remoteInvalidated && publishInvalidation(CLEAR_ALL_MESSAGE));
+        PendingInvalidation pending = new PendingInvalidation(
+                sequence,
+                null,
+                true,
+                publish,
+                generationAdvanced,
+                remoteInvalidated,
+                published
+        );
+        if (pending.complete()) {
+            pendingClearInvalidation.set(null);
+        } else {
+            pendingClearInvalidation.set(pending);
         }
     }
 
-    private void publishInvalidation(String key) {
+    private boolean publishInvalidation(String key) {
         try {
             invalidationBus.publish(name, key);
+            return true;
         } catch (RuntimeException ex) {
             metrics.invalidationError.increment();
-            // Pub/Sub 丢失时由短 L1 TTL 兜底，不影响已提交的业务写入。
             log.warn("Cache invalidation publish failed, cache={}, reason={}", name, ex.toString());
+            return false;
+        }
+    }
+
+    private boolean evictRemoteKey(Object key, GenerationLookup previousGeneration) {
+        try {
+            Object physicalKey = previousGeneration.available()
+                    ? remoteKey(key, previousGeneration.generation())
+                    : key;
+            remoteCache.evict(physicalKey);
+            return true;
+        } catch (RuntimeException ex) {
+            metrics.remoteError.increment();
+            log.warn("L2 cache eviction failed, cache={}, key={}, reason={}", name, key, ex.toString());
+            return false;
+        }
+    }
+
+    private boolean clearRemote() {
+        try {
+            remoteCache.clear();
+            return true;
+        } catch (RuntimeException ex) {
+            metrics.remoteError.increment();
+            log.warn("L2 cache clear failed, cache={}, reason={}", name, ex.toString());
+            return false;
+        }
+    }
+
+    private void retryPendingInvalidations() {
+        try {
+            PendingInvalidation clear = pendingClearInvalidation.get();
+            if (clear != null && retry(clear)) {
+                pendingClearInvalidation.compareAndSet(clear, null);
+            }
+            pendingKeyInvalidations.forEach((key, pending) -> {
+                if (retry(pending)) {
+                    pendingKeyInvalidations.remove(key, pending);
+                }
+            });
+        } catch (RuntimeException ex) {
+            log.warn("Cache invalidation compensation failed, cache={}, reason={}", name, ex.toString());
+        }
+    }
+
+    private boolean retry(PendingInvalidation pending) {
+        synchronized (pending) {
+            if (!pending.generationAdvanced) {
+                pending.generationAdvanced = pending.clear
+                        ? advanceAllGeneration()
+                        : advanceKeyGeneration(pending.key);
+            }
+            if (!pending.remoteInvalidated) {
+                pending.remoteInvalidated = pending.clear
+                        ? clearRemote()
+                        : evictRemoteKey(pending.key, generation(pending.key));
+            }
+            if (!pending.published
+                    && pending.publish
+                    && pending.generationAdvanced
+                    && pending.remoteInvalidated) {
+                pending.published = publishInvalidation(
+                        pending.clear ? CLEAR_ALL_MESSAGE : String.valueOf(pending.key));
+            }
+            return pending.complete();
         }
     }
 
     private void onRemoteInvalidation(String key) {
-        if (CLEAR_ALL_MESSAGE.equals(key)) {
-            localClearEpoch.incrementAndGet();
-        } else {
-            bumpLocalKeyEpoch(key);
-        }
+        localClearEpoch.incrementAndGet();
     }
 
     private GenerationLookup generation(Object key) {
@@ -482,27 +576,31 @@ public final class TwoLevelCache implements Cache, AutoCloseable {
         }
     }
 
-    private void advanceKeyGeneration(Object key) {
+    private boolean advanceKeyGeneration(Object key) {
         if (!generationStore.isEnabled()) {
-            return;
+            return true;
         }
         try {
             generationStore.advanceKey(name, String.valueOf(key));
+            return true;
         } catch (RuntimeException ex) {
             metrics.invalidationError.increment();
             log.warn("Cache generation advance failed, cache={}, key={}, reason={}", name, key, ex.toString());
+            return false;
         }
     }
 
-    private void advanceAllGeneration() {
+    private boolean advanceAllGeneration() {
         if (!generationStore.isEnabled()) {
-            return;
+            return true;
         }
         try {
             generationStore.advanceAll(name);
+            return true;
         } catch (RuntimeException ex) {
             metrics.invalidationError.increment();
             log.warn("Cache global generation advance failed, cache={}, reason={}", name, ex.toString());
+            return false;
         }
     }
 
@@ -514,12 +612,7 @@ public final class TwoLevelCache implements Cache, AutoCloseable {
     }
 
     private LocalEpoch localEpoch(Object key) {
-        AtomicLong keyEpoch = localKeyEpochs.get(key);
-        return new LocalEpoch(localClearEpoch.get(), keyEpoch == null ? 0L : keyEpoch.get());
-    }
-
-    private void bumpLocalKeyEpoch(Object key) {
-        localKeyEpochs.computeIfAbsent(key, ignored -> new AtomicLong()).incrementAndGet();
+        return new LocalEpoch(localClearEpoch.get());
     }
 
     private String lockName(Object key) {
@@ -552,7 +645,46 @@ public final class TwoLevelCache implements Cache, AutoCloseable {
 
     @Override
     public void close() {
+        invalidationRetryExecutor.shutdownNow();
         subscription.close();
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> T uncheckedCast(Object value) {
+        return (T) value;
+    }
+
+    private static final class PendingInvalidation {
+
+        private final long sequence;
+        private final Object key;
+        private final boolean clear;
+        private final boolean publish;
+        private boolean generationAdvanced;
+        private boolean remoteInvalidated;
+        private boolean published;
+
+        private PendingInvalidation(
+                long sequence,
+                Object key,
+                boolean clear,
+                boolean publish,
+                boolean generationAdvanced,
+                boolean remoteInvalidated,
+                boolean published
+        ) {
+            this.sequence = sequence;
+            this.key = key;
+            this.clear = clear;
+            this.publish = publish;
+            this.generationAdvanced = generationAdvanced;
+            this.remoteInvalidated = remoteInvalidated;
+            this.published = published;
+        }
+
+        private boolean complete() {
+            return generationAdvanced && remoteInvalidated && (!publish || published);
+        }
     }
 
     private record Lookup(boolean found, Object value) {
@@ -591,7 +723,7 @@ public final class TwoLevelCache implements Cache, AutoCloseable {
     private record LocalEntry(Object value, LocalEpoch epoch, boolean cacheable, boolean retryRequired) {
     }
 
-    private record LocalEpoch(long clear, long key) {
+    private record LocalEpoch(long clear) {
     }
 
     private record GenerationLookup(

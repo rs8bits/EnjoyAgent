@@ -237,6 +237,41 @@ class TwoLevelCacheTest {
     }
 
     @Test
+    void failedInvalidation_shouldAdvanceGenerationAfterRedisRecovers() throws Exception {
+        ConcurrentMapCache remote = new ConcurrentMapCache("agent-config-v4");
+        RecoveringGenerationStore generations = new RecoveringGenerationStore();
+        TwoLevelCache cache = cache(
+                "agent-config-v4",
+                remote,
+                new InMemoryInvalidationBus(),
+                false,
+                null,
+                generations
+        );
+        try {
+            cache.put("7:42", "old");
+            assertThat(cache.get("7:42", String.class)).isEqualTo("old");
+
+            generations.available.set(false);
+            cache.evict("7:42");
+            generations.available.set(true);
+
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (generations.snapshot("agent-config-v4", "7:42").key() == 0L
+                    && System.nanoTime() < deadline) {
+                Thread.sleep(25L);
+            }
+
+            assertThat(generations.snapshot("agent-config-v4", "7:42").key()).isPositive();
+            assertThat(cache.get("7:42", () -> "new")).isEqualTo("new");
+            assertThat(cache.get("7:42", String.class)).isEqualTo("new");
+            assertThat(remote.get("7:42::g0:0", String.class)).isEqualTo("old");
+        } finally {
+            cache.close();
+        }
+    }
+
+    @Test
     void remoteFailureWithLocalDisabled_shouldFailOpenToLoaderWithoutRetainingValue() {
         Cache remote = mock(Cache.class);
         when(remote.get("7:8")).thenThrow(new IllegalStateException("redis unavailable"));
@@ -465,6 +500,41 @@ class TwoLevelCacheTest {
 
         private AtomicLong key(String cacheName, String key) {
             return keys.computeIfAbsent(cacheName + ":" + key, ignored -> new AtomicLong());
+        }
+    }
+
+    private static final class RecoveringGenerationStore implements CacheGenerationStore {
+
+        private final AtomicReference<Boolean> available = new AtomicReference<>(true);
+        private final InMemoryGenerationStore delegate = new InMemoryGenerationStore();
+
+        @Override
+        public boolean isEnabled() {
+            return true;
+        }
+
+        @Override
+        public Generation snapshot(String cacheName, String key) {
+            requireAvailable();
+            return delegate.snapshot(cacheName, key);
+        }
+
+        @Override
+        public Generation advanceKey(String cacheName, String key) {
+            requireAvailable();
+            return delegate.advanceKey(cacheName, key);
+        }
+
+        @Override
+        public long advanceAll(String cacheName) {
+            requireAvailable();
+            return delegate.advanceAll(cacheName);
+        }
+
+        private void requireAvailable() {
+            if (!available.get()) {
+                throw new IllegalStateException("redis unavailable");
+            }
         }
     }
 

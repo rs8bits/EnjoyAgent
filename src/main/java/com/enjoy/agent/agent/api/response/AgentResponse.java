@@ -44,6 +44,12 @@ public record AgentResponse(
         @Schema(description = "绑定的知识库名称")
         String knowledgeBaseName,
 
+        @Schema(description = "绑定的工作流 ID")
+        Long workflowId,
+
+        @Schema(description = "绑定的工作流名称")
+        String workflowName,
+
         @Schema(description = "是否启用知识检索二阶段重排", example = "true")
         boolean rerankEnabled,
 

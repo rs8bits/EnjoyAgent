@@ -19,7 +19,10 @@ import com.enjoy.agent.chat.infrastructure.persistence.ChatSessionRepository;
 import com.enjoy.agent.credential.domain.enums.CredentialProvider;
 import com.enjoy.agent.model.domain.enums.ModelType;
 import com.enjoy.agent.modelgateway.application.ModelGatewayService;
+import com.enjoy.agent.modelgateway.application.ModelGatewayChatCompletion;
+import com.enjoy.agent.modelgateway.application.ModelCallAccountingService;
 import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
+import com.enjoy.agent.billing.application.BillingUsageApplicationService;
 import com.enjoy.agent.modelgateway.domain.enums.CredentialSource;
 import com.enjoy.agent.tenant.domain.entity.Tenant;
 import java.util.List;
@@ -58,6 +61,9 @@ class ChatSessionMemoryServiceTest {
     @Mock
     private Cache summaryCache;
 
+    @Mock private BillingUsageApplicationService billingUsageApplicationService;
+    @Mock private ModelCallAccountingService modelCallAccountingService;
+
     private ChatSessionMemoryService chatSessionMemoryService;
 
     @BeforeEach
@@ -68,7 +74,9 @@ class ChatSessionMemoryServiceTest {
                 chatMessageRepository,
                 modelGatewayService,
                 transactionTemplate,
-                cacheManager
+                cacheManager,
+                billingUsageApplicationService,
+                modelCallAccountingService
         );
     }
 
@@ -100,13 +108,17 @@ class ChatSessionMemoryServiceTest {
                         chatMessage(103L, ChatMessageRole.USER, "第二问"),
                         chatMessage(104L, ChatMessageRole.ASSISTANT, "第二答")
                 ));
-        when(modelGatewayService.generateText(eq(chatModelConfig), any(), any()))
-                .thenReturn("- 用户目标\n- 了解系统现状");
+        ModelGatewayChatCompletion completion = new ModelGatewayChatCompletion(
+                "- 用户目标\n- 了解系统现状", List.of(), CredentialProvider.OPENAI, "qwen-plus",
+                CredentialSource.USER, 1L, 20L, 10, 5, 15);
+        when(modelGatewayService.generateChatCompletion(
+                eq(chatModelConfig), any(), any(), any(), any(), any())).thenReturn(completion);
         when(chatSessionRepository.findByIdAndTenant_Id(8L, 7L)).thenReturn(Optional.of(chatSession()));
         when(chatSessionMemoryRepository.save(any(ChatSessionMemory.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(cacheManager.getCache("session-summary-v3")).thenReturn(summaryCache);
 
-        chatSessionMemoryService.refreshSummaryIfNeeded(7L, 8L, preparedSessionMemory, chatModelConfig);
+        PreparedChatTurn turn = preparedTurn(preparedSessionMemory, chatModelConfig);
+        chatSessionMemoryService.refreshSummaryIfNeeded(turn);
 
         ArgumentCaptor<ChatSessionMemory> memoryCaptor = ArgumentCaptor.forClass(ChatSessionMemory.class);
         verify(chatSessionMemoryRepository).save(memoryCaptor.capture());
@@ -116,6 +128,7 @@ class ChatSessionMemoryServiceTest {
         assertThat(savedMemory.getLastMessageId()).isEqualTo(104L);
         assertThat(savedMemory.getVersion()).isEqualTo(1);
         verify(summaryCache).evict("7:8:SESSION_SUMMARY");
+        verify(modelCallAccountingService).recordSuccess(eq(turn), eq(completion), any());
     }
 
     @Test
@@ -130,9 +143,11 @@ class ChatSessionMemoryServiceTest {
                         chatMessage(102L, ChatMessageRole.ASSISTANT, "第一答")
                 ));
 
-        chatSessionMemoryService.refreshSummaryIfNeeded(7L, 8L, preparedSessionMemory, preparedChatModelConfig());
+        chatSessionMemoryService.refreshSummaryIfNeeded(
+                preparedTurn(preparedSessionMemory, preparedChatModelConfig()));
 
-        verify(modelGatewayService, never()).generateText(any(), any(), any());
+        verify(modelGatewayService, never()).generateChatCompletion(
+                any(), any(), any(), any(), any(), any());
         verify(chatSessionMemoryRepository, never()).save(any());
     }
 
@@ -147,6 +162,15 @@ class ChatSessionMemoryServiceTest {
                 null,
                 512
         );
+    }
+
+    private PreparedChatTurn preparedTurn(
+            PreparedSessionMemory memory,
+            PreparedModelConfig modelConfig
+    ) {
+        return new PreparedChatTurn(
+                7L, 2L, 3L, 8L, 104L, "第二问", "", memory, modelConfig,
+                null, List.of(), null, null, List.of(), null, List.of());
     }
 
     private ChatSession chatSession() {

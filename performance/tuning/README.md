@@ -22,11 +22,11 @@ Start the local infrastructure and package the exact JAR to test:
 
 ```bash
 docker compose up -d postgres redis minio rabbitmq
-mvn clean package
+./mvnw clean package
 ```
 
-This repository has no Maven wrapper. If `mvn` is not on `PATH`, set `MAVEN_BIN` to the Maven
-executable bundled with the IDE and run `"$MAVEN_BIN" clean package`. Install Apache JMeter 5.6.3
+The checked-in Maven wrapper pins the build toolchain. If you intentionally use another Maven,
+set `MAVEN_BIN` and run `"$MAVEN_BIN" clean package`. Install Apache JMeter 5.6.3
 and pass its absolute executable path through `JMETER_BIN`. Do not run another EnjoyAgent instance
 on port 8080 while the matrix owns the application lifecycle.
 

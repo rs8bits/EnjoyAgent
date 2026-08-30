@@ -15,13 +15,18 @@ import com.enjoy.agent.shared.crypto.AesCryptoService;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
+import com.enjoy.agent.shared.security.OutboundUrlPolicy;
+import com.enjoy.agent.tenant.domain.enums.TenantMemberRole;
 import java.net.URI;
+import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.Base64;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -39,7 +44,6 @@ import org.springframework.web.util.UriComponentsBuilder;
 public class McpOAuthApplicationService {
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
-
     private final McpServerApplicationService mcpServerApplicationService;
     private final McpOAuthConnectionRepository mcpOAuthConnectionRepository;
     private final McpOAuthDiscoveryService mcpOAuthDiscoveryService;
@@ -47,6 +51,8 @@ public class McpOAuthApplicationService {
     private final AppUserRepository appUserRepository;
     private final AesCryptoService aesCryptoService;
     private final RestClient restClient;
+    private final OutboundUrlPolicy outboundUrlPolicy;
+    private final int httpDeadlineSeconds;
 
     public McpOAuthApplicationService(
             McpServerApplicationService mcpServerApplicationService,
@@ -54,7 +60,9 @@ public class McpOAuthApplicationService {
             McpOAuthDiscoveryService mcpOAuthDiscoveryService,
             McpOAuthProperties mcpOAuthProperties,
             AppUserRepository appUserRepository,
-            AesCryptoService aesCryptoService
+            AesCryptoService aesCryptoService,
+            McpRuntimeProperties runtimeProperties,
+            OutboundUrlPolicy outboundUrlPolicy
     ) {
         this.mcpServerApplicationService = mcpServerApplicationService;
         this.mcpOAuthConnectionRepository = mcpOAuthConnectionRepository;
@@ -62,7 +70,15 @@ public class McpOAuthApplicationService {
         this.mcpOAuthProperties = mcpOAuthProperties;
         this.appUserRepository = appUserRepository;
         this.aesCryptoService = aesCryptoService;
-        this.restClient = RestClient.builder().build();
+        this.outboundUrlPolicy = outboundUrlPolicy;
+        this.httpDeadlineSeconds = runtimeProperties.getHttpReadTimeoutSeconds();
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(runtimeProperties.getHttpConnectTimeoutSeconds()))
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(Duration.ofSeconds(runtimeProperties.getHttpReadTimeoutSeconds()));
+        this.restClient = RestClient.builder().requestFactory(requestFactory).build();
     }
 
     /**
@@ -71,6 +87,7 @@ public class McpOAuthApplicationService {
     @Transactional
     public McpOAuthAuthorizationResponse startAuthorization(Long serverId, StartMcpOAuthAuthorizationRequest request) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
+        requireOwner(currentUser);
         McpServer server = requireAuthCodeServer(serverId);
         McpOAuthDiscoveryResult discovery = mcpOAuthDiscoveryService.discover(server.getBaseUrl());
         if (!discovery.pkceS256Supported()) {
@@ -137,6 +154,7 @@ public class McpOAuthApplicationService {
             ConnectMcpOAuthClientCredentialsRequest request
     ) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
+        requireOwner(currentUser);
         McpServer server = requireClientCredentialsServer(serverId);
         AppUser connectedByUser = appUserRepository.findById(currentUser.userId())
                 .orElseThrow(() -> new ApiException("USER_NOT_FOUND", "Current user not found", HttpStatus.UNAUTHORIZED));
@@ -204,6 +222,7 @@ public class McpOAuthApplicationService {
      */
     @Transactional
     public void disconnect(Long serverId) {
+        requireOwner(CurrentUserContext.requireCurrentUser());
         mcpServerApplicationService.requireTenantOwnedServer(serverId);
         mcpOAuthConnectionRepository.deleteByServer_Id(serverId);
     }
@@ -344,23 +363,35 @@ public class McpOAuthApplicationService {
             MultiValueMap<String, String> form,
             String errorCode
     ) {
-        TokenHttpResponse response = restClient.post()
-                .uri(URI.create(connection.getTokenEndpoint()))
-                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                .accept(MediaType.APPLICATION_JSON)
-                .body(form)
-                .exchange((request, clientResponse) -> new TokenHttpResponse(
-                        clientResponse.getStatusCode().value(),
-                        clientResponse.getHeaders(),
-                        clientResponse.bodyTo(String.class)
-                ));
-
+        final TokenHttpResponse response;
+        try {
+            URI tokenEndpoint = outboundUrlPolicy.requireAllowedHttpUrl(
+                    connection.getTokenEndpoint(), "MCP_OAUTH_TOKEN_ENDPOINT_INVALID");
+            response = McpHttpDeadline.call(httpDeadlineSeconds, () -> restClient.post()
+                    .uri(tokenEndpoint)
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .body(form)
+                    .exchange((request, clientResponse) -> new TokenHttpResponse(
+                            clientResponse.getStatusCode().value(),
+                            clientResponse.getHeaders(),
+                            McpBoundedResponseReader.readUtf8(
+                                    clientResponse,
+                                    mcpOAuthProperties.getMaxTokenResponseBytes(),
+                                    errorCode,
+                                    "OAuth token response is too large"
+                            )
+                    )), errorCode, "OAuth token request timed out");
+        } catch (ApiException ex) {
+            markError(connection, ex.getCode(), ex.getMessage(), true);
+            throw ex;
+        } catch (RuntimeException ex) {
+            markError(connection, errorCode, "OAuth token endpoint could not be reached", true);
+            throw new ApiException(errorCode,
+                    "OAuth token endpoint could not be reached", HttpStatus.BAD_GATEWAY);
+        }
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             String message = "OAuth token endpoint returned HTTP " + response.statusCode();
-            String responseDetail = extractTokenEndpointError(response.body());
-            if (StringUtils.hasText(responseDetail)) {
-                message += ": " + responseDetail;
-            }
             markError(connection, errorCode, message, true);
             throw new ApiException(errorCode, message, HttpStatus.BAD_GATEWAY);
         }
@@ -550,6 +581,13 @@ public class McpOAuthApplicationService {
             return value;
         }
         return value.substring(0, maxLength);
+    }
+
+    private void requireOwner(AuthenticatedUser user) {
+        if (user.role() != TenantMemberRole.OWNER) {
+            throw new ApiException("TENANT_OWNER_REQUIRED",
+                    "Only tenant owners can modify MCP OAuth connections", HttpStatus.FORBIDDEN);
+        }
     }
 
     private record TokenHttpResponse(

@@ -11,6 +11,7 @@ import com.enjoy.agent.model.infrastructure.persistence.ModelConfigRepository;
 import com.enjoy.agent.modelgateway.application.ModelGatewayResult;
 import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
 import com.enjoy.agent.modelgateway.domain.enums.CredentialSource;
+import com.enjoy.agent.mcp.application.McpGatewayService;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
@@ -30,12 +31,19 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.security.concurrent.DelegatingSecurityContextRunnable;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @Service
@@ -53,6 +61,10 @@ public class WorkflowOrchestratorService {
     private final TenantRepository tenantRepository;
     private final ObjectMapper objectMapper;
     private final AgentRepository agentRepository;
+    private final McpGatewayService mcpGatewayService;
+    private final WorkflowRuntimeProperties runtimeProperties;
+    private final WorkflowOutputSanitizer outputSanitizer = new WorkflowOutputSanitizer();
+    private final Map<Long, ActiveTestRun> activeTestRuns = new ConcurrentHashMap<>();
 
     public WorkflowOrchestratorService(
             WorkflowRepository workflowRepository,
@@ -64,7 +76,9 @@ public class WorkflowOrchestratorService {
             WorkflowExecutionRepository executionRepository,
             TenantRepository tenantRepository,
             ObjectMapper objectMapper,
-            AgentRepository agentRepository
+            AgentRepository agentRepository,
+            McpGatewayService mcpGatewayService,
+            WorkflowRuntimeProperties runtimeProperties
     ) {
         this.workflowRepository = workflowRepository;
         this.workflowNodeRepository = workflowNodeRepository;
@@ -76,10 +90,12 @@ public class WorkflowOrchestratorService {
         this.tenantRepository = tenantRepository;
         this.objectMapper = objectMapper;
         this.agentRepository = agentRepository;
+        this.mcpGatewayService = mcpGatewayService;
+        this.runtimeProperties = runtimeProperties;
     }
 
     public ModelGatewayResult executeWorkflow(PreparedChatTurn turn) {
-        Workflow workflow = workflowRepository.findById(turn.workflowId())
+        Workflow workflow = workflowRepository.findByIdAndTenant_Id(turn.workflowId(), turn.tenantId())
                 .orElseThrow(() -> new ApiException("WORKFLOW_NOT_FOUND", "Workflow not found", HttpStatus.INTERNAL_SERVER_ERROR));
         if (!workflow.isEnabled()) {
             throw new ApiException("WORKFLOW_DISABLED", "Workflow is disabled", HttpStatus.INTERNAL_SERVER_ERROR);
@@ -90,27 +106,31 @@ public class WorkflowOrchestratorService {
         dagExecutor.validate(nodes, edges);
         List<WorkflowNode> sortedNodes = dagExecutor.topologicalSort(nodes, edges);
 
-        WorkflowExecution execution = beginExecution(workflow, turn.latestUserMessageContent(), "CHAT", sortedNodes.size());
+        WorkflowExecution execution = beginExecution(
+                workflow, turn.latestUserMessageContent(), "CHAT", sortedNodes.size(), turn.tenantId());
         long startMs = System.currentTimeMillis();
+        WorkflowExecutionBudget executionBudget = new WorkflowExecutionBudget(runtimeProperties);
 
-        try {
+        try (McpGatewayService.McpTurnSession mcpTurnSession = mcpGatewayService.openTurnSession()) {
             Map<String, Object> initialContext = new HashMap<>();
             initialContext.put("user_input", turn.latestUserMessageContent());
             initialContext.put("history_messages", turn.historyMessages());
             initialContext.put("system_prompt", turn.systemPrompt());
+            initialContext.put("mcp_tool_approval_tokens", turn.mcpToolApprovalTokens());
             if (turn.sessionMemory() != null && turn.sessionMemory().summary() != null) {
                 initialContext.put("session_memory_summary", turn.sessionMemory().summary());
             }
 
             NodeExecutionContext baseCtx = new NodeExecutionContext(
                     turn.tenantId(), turn.userId(), turn.agentId(), turn.sessionId(),
-                    sortedNodes.get(0), turn.modelConfig(), initialContext
+                    sortedNodes.get(0), turn.modelConfig(), initialContext, turn, mcpTurnSession,
+                    executionBudget, indexWorkflowNodes(nodes)
             );
 
             Map<String, Object> finalContext = dagExecutor.execute(sortedNodes, edges, nodeExecutorRegistry, baseCtx);
             String finalOutput = extractFinalOutput(finalContext);
             completeExecution(execution, "COMPLETED", startMs, finalOutput, finalContext);
-            return buildResult(finalContext, finalOutput, turn);
+            return buildResult(finalContext, finalOutput, turn, executionBudget);
         } catch (RuntimeException ex) {
             completeExecution(execution, "FAILED", startMs, null, null);
             execution.setErrorMessage(truncate(ex.getMessage(), 1000));
@@ -127,6 +147,11 @@ public class WorkflowOrchestratorService {
             SseEmitter emitter
     ) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
+        SecurityContext securityContext = SecurityContextHolder.createEmptyContext();
+        securityContext.setAuthentication(SecurityContextHolder.getContext().getAuthentication());
+        AtomicReference<WorkflowExecutionBudget> budgetReference = new AtomicReference<>();
+        AtomicBoolean clientDisconnected = new AtomicBoolean();
+        AtomicBoolean finished = new AtomicBoolean();
         Runnable task = () -> {
             Workflow workflow = null;
             WorkflowExecution execution = null;
@@ -145,41 +170,120 @@ public class WorkflowOrchestratorService {
                 execution = beginExecution(workflow, userInput, "TEST", totalNodes, currentUser.tenantId());
 
                 PreparedModelConfig modelConfig = resolveModelConfigForTest(modelConfigId, currentUser.tenantId());
+                WorkflowExecutionBudget executionBudget = new WorkflowExecutionBudget(runtimeProperties);
+                budgetReference.set(executionBudget);
+                activeTestRuns.put(execution.getId(), new ActiveTestRun(
+                        currentUser.tenantId(), executionBudget, Thread.currentThread()));
+                sendEventOrCancel(emitter, executionBudget, "started", Map.of(
+                        "executionId", execution.getId(), "totalNodes", totalNodes));
 
                 Map<String, Object> initialContext = new HashMap<>();
                 initialContext.put("user_input", userInput);
                 initialContext.put("history_messages", List.of());
                 initialContext.put("system_prompt", "");
 
-                NodeExecutionContext baseCtx = new NodeExecutionContext(
-                        workflow.getTenant().getId(),
-                        currentUser.userId(),
-                        resolveAgentIdForTest(workflow),
-                        null,
-                        sortedNodes.get(0),
-                        modelConfig,
-                        initialContext
-                );
-
-                Map<String, Object> finalContext = dagExecutor.execute(sortedNodes, edges, nodeExecutorRegistry, baseCtx, event -> {
-                    try { emitter.send(SseEmitter.event().name(event.type()).data(event)); } catch (Exception ignored) {}
-                });
+                Map<String, Object> finalContext;
+                try (McpGatewayService.McpTurnSession mcpTurnSession = mcpGatewayService.openTurnSession()) {
+                    NodeExecutionContext baseCtx = new NodeExecutionContext(
+                            workflow.getTenant().getId(), currentUser.userId(), resolveAgentIdForTest(workflow),
+                            null, sortedNodes.get(0), modelConfig, initialContext, null, mcpTurnSession,
+                            executionBudget, indexWorkflowNodes(nodes));
+                    finalContext = dagExecutor.execute(sortedNodes, edges, nodeExecutorRegistry, baseCtx, event -> {
+                        sendEventOrCancel(
+                                emitter, executionBudget, event.type(), outputSanitizer.sanitizeEvent(event));
+                    });
+                }
 
                 String finalOutput = extractFinalOutput(finalContext);
                 completeExecution(execution, "COMPLETED", startMs, finalOutput, finalContext);
-                emitter.send(SseEmitter.event().name("completed").data(Map.of(
-                        "finalOutput", finalOutput, "totalNodes", totalNodes, "executedContext", (Object) finalContext
-                )));
+                sendEventOrCancel(emitter, executionBudget, "completed", Map.of(
+                        "finalOutput", outputSanitizer.sanitizeText(finalOutput),
+                        "totalNodes", totalNodes,
+                        "executedContext", outputSanitizer.sanitizeMap(finalContext)
+                ));
+                finished.set(true);
                 emitter.complete();
             } catch (ApiException ex) {
-                if (execution != null) { completeExecution(execution, "FAILED", startMs, null, null); execution.setErrorMessage(truncate(ex.getMessage(), 1000)); executionRepository.save(execution); }
-                sendErrorAndComplete(emitter, ex.getCode(), ex.getMessage());
+                boolean cancelled = clientDisconnected.get()
+                        || "WORKFLOW_EXECUTION_CANCELLED".equals(ex.getCode())
+                        || "WORKFLOW_CLIENT_DISCONNECTED".equals(ex.getCode());
+                if (execution != null) {
+                    if (cancelled) {
+                        Thread.interrupted();
+                    }
+                    completeExecution(execution, cancelled ? "CANCELLED" : "FAILED", startMs, null, null);
+                    execution.setErrorMessage(truncate(cancelled ? "Workflow execution cancelled" : ex.getMessage(), 1000));
+                    executionRepository.save(execution);
+                }
+                if (!clientDisconnected.get()) {
+                    finished.set(true);
+                    sendErrorAndComplete(emitter, ex.getCode(), ex.getMessage());
+                }
             } catch (Exception ex) {
-                if (execution != null) { completeExecution(execution, "FAILED", startMs, null, null); execution.setErrorMessage(truncate(ex.getMessage(), 1000)); executionRepository.save(execution); }
-                sendErrorAndComplete(emitter, "TEST_RUN_FAILED", ex.getMessage());
+                boolean cancelled = clientDisconnected.get() || Thread.currentThread().isInterrupted();
+                if (execution != null) {
+                    if (cancelled) {
+                        Thread.interrupted();
+                    }
+                    completeExecution(execution, cancelled ? "CANCELLED" : "FAILED", startMs, null, null);
+                    execution.setErrorMessage(truncate(
+                            cancelled ? "Workflow execution cancelled" : "Workflow test-run failed", 1000));
+                    executionRepository.save(execution);
+                }
+                if (!clientDisconnected.get()) {
+                    finished.set(true);
+                    sendErrorAndComplete(emitter,
+                            cancelled ? "WORKFLOW_EXECUTION_CANCELLED" : "TEST_RUN_FAILED",
+                            cancelled ? "Workflow execution was cancelled" : "Workflow test-run failed");
+                }
+            } finally {
+                if (execution != null && execution.getId() != null) {
+                    activeTestRuns.remove(execution.getId());
+                }
+                budgetReference.set(null);
             }
         };
-        Thread.ofVirtual().name("workflow-test-" + workflowId).start(task);
+        Thread thread = Thread.ofVirtual().name("workflow-test-" + workflowId)
+                .unstarted(new DelegatingSecurityContextRunnable(task, securityContext));
+        Runnable disconnect = () -> {
+            if (!finished.get()) {
+                clientDisconnected.set(true);
+                WorkflowExecutionBudget budget = budgetReference.get();
+                if (budget != null) {
+                    budget.cancel();
+                }
+                thread.interrupt();
+            }
+        };
+        emitter.onTimeout(disconnect);
+        emitter.onError(ignored -> disconnect.run());
+        emitter.onCompletion(disconnect);
+        thread.start();
+    }
+
+    public long testRunTimeoutMs() {
+        return Math.multiplyExact((long) runtimeProperties.getMaxDurationSeconds(), 1_000L);
+    }
+
+    public void cancelTestRun(Long executionId) {
+        AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
+        WorkflowExecution execution = executionRepository
+                .findByIdAndTenant_Id(executionId, currentUser.tenantId())
+                .orElseThrow(() -> new ApiException(
+                        "WORKFLOW_EXECUTION_NOT_FOUND", "Workflow execution not found", HttpStatus.NOT_FOUND));
+        if (!"RUNNING".equals(execution.getStatus())) {
+            throw new ApiException(
+                    "WORKFLOW_EXECUTION_NOT_RUNNING", "Workflow execution is no longer running", HttpStatus.CONFLICT);
+        }
+        ActiveTestRun active = activeTestRuns.get(executionId);
+        if (active == null || !active.tenantId().equals(currentUser.tenantId())) {
+            throw new ApiException(
+                    "WORKFLOW_EXECUTION_NOT_CANCELLABLE",
+                    "Workflow execution is not active on this application instance",
+                    HttpStatus.CONFLICT);
+        }
+        active.budget().cancel();
+        active.thread().interrupt();
     }
 
     private WorkflowGraph resolveWorkflowGraph(Workflow workflow, SaveWorkflowCanvasRequest draftCanvas) {
@@ -192,10 +296,14 @@ public class WorkflowOrchestratorService {
 
         List<WorkflowNode> nodes = new java.util.ArrayList<>();
         long syntheticId = -1L;
-        for (SaveWorkflowCanvasRequest.NodeItem item : draftCanvas.nodes()) {
+        for (int nodeIndex = 0; nodeIndex < draftCanvas.nodes().size(); nodeIndex++) {
+            SaveWorkflowCanvasRequest.NodeItem item = draftCanvas.nodes().get(nodeIndex);
             WorkflowNode node = new WorkflowNode();
             node.setId(syntheticId--);
             node.setWorkflow(workflow);
+            node.setNodeKey(item.nodeKey() == null || item.nodeKey().isBlank()
+                    ? "node_" + nodeIndex
+                    : item.nodeKey().trim());
             node.setName(item.name());
             node.setNodeType(WorkflowNodeType.valueOf(item.nodeType().trim().toUpperCase()));
             node.setConfigJson(item.configJson() == null || item.configJson().isBlank() ? "{}" : item.configJson());
@@ -226,14 +334,22 @@ public class WorkflowOrchestratorService {
         return new WorkflowGraph(nodes, edges);
     }
 
-    private PreparedModelConfig resolveModelConfigForTest(Long modelConfigId, Long tenantId) {
+    PreparedModelConfig resolveModelConfigForTest(Long modelConfigId, Long tenantId) {
         ModelConfig mc = modelConfigRepository.findByIdAndTenant_Id(modelConfigId, tenantId)
                 .orElseThrow(() -> new ApiException("MODEL_CONFIG_NOT_FOUND", "Model config not found", HttpStatus.BAD_REQUEST));
         if (!mc.isEnabled() || mc.getModelType() != ModelType.CHAT) {
             throw new ApiException("MODEL_CONFIG_INVALID", "Model config must be an enabled chat model", HttpStatus.BAD_REQUEST);
         }
         CredentialSource credentialSource = mc.getCredentialSource() == ModelCredentialSource.USER
+                || (mc.getCredentialSource() == null && mc.getCredential() != null)
                 ? CredentialSource.USER : CredentialSource.PLATFORM;
+        if (credentialSource == CredentialSource.PLATFORM) {
+            throw new ApiException(
+                    "WORKFLOW_TEST_PLATFORM_MODEL_FORBIDDEN",
+                    "Workflow test-run cannot use platform-funded model credentials",
+                    HttpStatus.FORBIDDEN
+            );
+        }
         return new PreparedModelConfig(
                 mc.getProvider() != null ? mc.getProvider() : CredentialProvider.OPENAI,
                 ModelType.CHAT,
@@ -264,6 +380,25 @@ public class WorkflowOrchestratorService {
         emitter.complete();
     }
 
+    private void sendEventOrCancel(
+            SseEmitter emitter,
+            WorkflowExecutionBudget budget,
+            String eventName,
+            Object data
+    ) {
+        budget.checkActive();
+        try {
+            emitter.send(SseEmitter.event().name(eventName).data(data));
+        } catch (Exception ex) {
+            budget.cancel();
+            throw new ApiException(
+                    "WORKFLOW_CLIENT_DISCONNECTED",
+                    "Workflow event stream was disconnected",
+                    HttpStatus.CONFLICT
+            );
+        }
+    }
+
     private String extractFinalOutput(Map<String, Object> context) {
         Object output = context.get("final_output");
         if (output != null) {
@@ -276,9 +411,14 @@ public class WorkflowOrchestratorService {
         return "";
     }
 
-    private ModelGatewayResult buildResult(Map<String, Object> context, String content, PreparedChatTurn turn) {
-        int promptTokens = intFromContext(context, "llm_prompt_tokens");
-        int completionTokens = intFromContext(context, "llm_completion_tokens");
+    private ModelGatewayResult buildResult(
+            Map<String, Object> context,
+            String content,
+            PreparedChatTurn turn,
+            WorkflowExecutionBudget executionBudget
+    ) {
+        int promptTokens = executionBudget.promptTokens();
+        int completionTokens = executionBudget.completionTokens();
         int totalTokens = promptTokens + completionTokens;
 
         return new ModelGatewayResult(
@@ -294,21 +434,16 @@ public class WorkflowOrchestratorService {
         );
     }
 
-    private int intFromContext(Map<String, Object> context, String key) {
-        Object value = context.get(key);
-        if (value instanceof Number n) {
-            return n.intValue();
-        }
-        return 0;
-    }
-
     private CredentialSource resolveCredentialSource(com.enjoy.agent.modelgateway.application.PreparedModelConfig modelConfig) {
         return modelConfig.credentialSource();
     }
 
-    private WorkflowExecution beginExecution(Workflow workflow, String input, String triggerType, int nodeCount) {
-        Long tenantId = CurrentUserContext.requireCurrentUser().tenantId();
-        return beginExecution(workflow, input, triggerType, nodeCount, tenantId);
+    private Map<String, WorkflowNode> indexWorkflowNodes(List<WorkflowNode> nodes) {
+        Map<String, WorkflowNode> byKey = new LinkedHashMap<>();
+        for (WorkflowNode node : nodes) {
+            byKey.put(node.getNodeKey(), node);
+        }
+        return byKey;
     }
 
     private WorkflowExecution beginExecution(Workflow workflow, String input, String triggerType, int nodeCount, Long tenantId) {
@@ -319,7 +454,7 @@ public class WorkflowOrchestratorService {
         exec.setTenant(tenant);
         exec.setTriggerType(triggerType);
         exec.setStatus("RUNNING");
-        exec.setInputJson(input);
+        exec.setInputJson(outputSanitizer.sanitizeText(input));
         exec.setNodeCount(nodeCount);
         exec.setCreatedAt(Instant.now());
         return executionRepository.save(exec);
@@ -330,7 +465,7 @@ public class WorkflowOrchestratorService {
         exec.setDurationMs(System.currentTimeMillis() - startMs);
         exec.setCompletedAt(Instant.now());
         if (output != null) {
-            exec.setOutputJson(output);
+            exec.setOutputJson(outputSanitizer.sanitizeText(output));
         }
         if (context != null) {
             try {
@@ -348,6 +483,13 @@ public class WorkflowOrchestratorService {
     private record WorkflowGraph(
             List<WorkflowNode> nodes,
             List<WorkflowEdge> edges
+    ) {
+    }
+
+    private record ActiveTestRun(
+            Long tenantId,
+            WorkflowExecutionBudget budget,
+            Thread thread
     ) {
     }
 }

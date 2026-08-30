@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -97,9 +98,11 @@ public class ChatController {
     @PostMapping("/sessions/{id}/messages")
     public ApiResponse<ChatTurnResponse> sendMessage(
             @PathVariable Long id,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @Valid @RequestBody SendChatMessageRequest request
     ) {
-        return ApiResponse.success(chatApplicationService.sendMessage(id, request), "Chat completed");
+        return ApiResponse.success(
+                chatApplicationService.sendMessage(id, request, idempotencyKey), "Chat completed");
     }
 
     /**
@@ -109,8 +112,9 @@ public class ChatController {
     @PostMapping(path = "/sessions/{id}/messages/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamMessage(
             @PathVariable Long id,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @Valid @RequestBody SendChatMessageRequest request
     ) {
-        return chatApplicationService.streamMessage(id, request);
+        return chatApplicationService.streamMessage(id, request, idempotencyKey);
     }
 }

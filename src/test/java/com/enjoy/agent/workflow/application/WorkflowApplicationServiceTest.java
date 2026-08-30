@@ -1,7 +1,9 @@
 package com.enjoy.agent.workflow.application;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -27,6 +29,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 
 @ExtendWith(MockitoExtension.class)
 class WorkflowApplicationServiceTest {
@@ -121,6 +125,42 @@ class WorkflowApplicationServiceTest {
 
         verify(dagExecutor).validate(any(), any());
         verify(dagExecutor).topologicalSort(any(), any());
+    }
+
+    @Test
+    void listWorkflows_shouldLoadCountsWithTwoGroupedQueriesForTheCurrentPage() {
+        Workflow first = workflow();
+        Workflow second = workflow();
+        second.setId(4L);
+        second.setName("第二个工作流");
+        PageRequest pageable = PageRequest.of(0, 20);
+        when(workflowRepository.findAllByTenant_Id(7L, pageable))
+                .thenReturn(new PageImpl<>(List.of(first, second), pageable, 2));
+        when(workflowNodeRepository.countGroupedByWorkflowId(List.of(3L, 4L)))
+                .thenReturn(List.of(new Object[]{3L, 5L}, new Object[]{4L, 2L}));
+        when(workflowEdgeRepository.countGroupedByWorkflowId(List.of(3L, 4L)))
+                .thenReturn(List.<Object[]>of(new Object[]{3L, 4L}));
+
+        var page = workflowApplicationService.listWorkflows(pageable);
+
+        assertThat(page.getContent()).extracting(response -> response.nodeCount())
+                .containsExactly(5, 2);
+        assertThat(page.getContent()).extracting(response -> response.edgeCount())
+                .containsExactly(4, 0);
+        verify(workflowNodeRepository, never()).findAllByWorkflow_IdOrderByIdAsc(any());
+        verify(workflowEdgeRepository, never()).findAllByWorkflow_Id(any());
+    }
+
+    @Test
+    void listWorkflows_shouldNotRunCountQueriesForAnEmptyPage() {
+        PageRequest pageable = PageRequest.of(3, 20);
+        when(workflowRepository.findAllByTenant_Id(7L, pageable))
+                .thenReturn(new PageImpl<>(List.of(), pageable, 0));
+
+        assertThat(workflowApplicationService.listWorkflows(pageable)).isEmpty();
+
+        verify(workflowNodeRepository, never()).countGroupedByWorkflowId(any());
+        verify(workflowEdgeRepository, never()).countGroupedByWorkflowId(any());
     }
 
     private Workflow workflow() {

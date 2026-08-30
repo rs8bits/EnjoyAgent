@@ -12,6 +12,7 @@ public record WorkflowCanvasResponse(
     @Schema(name = "WorkflowCanvasNodeItem", description = "画布节点")
     public record NodeItem(
             @Schema(description = "节点 ID") Long id,
+            @Schema(description = "节点稳定标识") String nodeKey,
             @Schema(description = "节点名称") String name,
             @Schema(description = "节点类型") String nodeType,
             @Schema(description = "节点配置 JSON") String configJson,

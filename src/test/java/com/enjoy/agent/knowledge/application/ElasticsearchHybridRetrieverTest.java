@@ -8,6 +8,7 @@ import com.enjoy.agent.credential.domain.enums.CredentialProvider;
 import com.enjoy.agent.model.domain.enums.ModelType;
 import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
 import com.enjoy.agent.modelgateway.domain.enums.CredentialSource;
+import com.enjoy.agent.knowledge.infrastructure.persistence.KnowledgeDocumentRepository;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +28,9 @@ class ElasticsearchHybridRetrieverTest {
     @Mock
     private PgVectorRetriever pgVectorRetriever;
 
+    @Mock
+    private KnowledgeDocumentRepository knowledgeDocumentRepository;
+
     private KnowledgeSearchProperties knowledgeSearchProperties;
     private ElasticsearchHybridRetriever retriever;
 
@@ -41,7 +45,8 @@ class ElasticsearchHybridRetrieverTest {
                 embeddingGatewayService,
                 knowledgeSearchProperties,
                 knowledgeSearchGateway,
-                pgVectorRetriever
+                pgVectorRetriever,
+                knowledgeDocumentRepository
         );
     }
 
@@ -61,6 +66,8 @@ class ElasticsearchHybridRetrieverTest {
                         new KnowledgeSearchMatch(2L, 10L, "员工手册.pdf", 1, "第二段", 11.2D, 1),
                         new KnowledgeSearchMatch(3L, 11L, "试用期制度.pdf", 0, "第三段", 10.5D, 2)
                 ));
+        when(knowledgeDocumentRepository.findReadyDocumentIds(1L, List.of(10L, 11L)))
+                .thenReturn(List.of(10L, 11L));
 
         List<RetrievedKnowledgeChunk> matches = retriever.retrieve(knowledgeBase, "请假规则", 3);
 

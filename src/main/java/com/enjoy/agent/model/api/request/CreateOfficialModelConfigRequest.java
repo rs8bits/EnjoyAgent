@@ -3,7 +3,10 @@ package com.enjoy.agent.model.api.request;
 import com.enjoy.agent.credential.domain.enums.CredentialProvider;
 import com.enjoy.agent.model.domain.enums.ModelType;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
@@ -35,20 +38,26 @@ public record CreateOfficialModelConfigRequest(
         Long officialCredentialId,
 
         @Schema(description = "默认温度", example = "0.2")
+        @DecimalMin(value = "0.0")
+        @DecimalMax(value = "2.0")
+        @Digits(integer = 1, fraction = 3)
         BigDecimal temperature,
 
         @Schema(description = "默认最大 token", example = "2048")
         @Positive
+        @Max(131072)
         Integer maxTokens,
 
         @Schema(description = "输入单价，单位：人民币/百万 token", example = "2.000000")
         @NotNull
         @DecimalMin(value = "0.0")
+        @Digits(integer = 11, fraction = 6)
         BigDecimal inputPricePerMillion,
 
         @Schema(description = "输出单价，单位：人民币/百万 token", example = "6.000000")
         @NotNull
         @DecimalMin(value = "0.0")
+        @Digits(integer = 11, fraction = 6)
         BigDecimal outputPricePerMillion,
 
         @Schema(description = "币种", example = "CNY")

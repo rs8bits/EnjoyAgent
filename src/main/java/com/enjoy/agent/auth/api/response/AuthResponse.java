@@ -8,7 +8,7 @@ import java.time.Instant;
  */
 @Schema(name = "AuthResponse", description = "注册或登录成功后的认证结果")
 public record AuthResponse(
-        @Schema(description = "JWT 访问令牌")
+        @Schema(description = "JWT 访问令牌；生产浏览器模式通过 HttpOnly cookie 交付时为空", nullable = true)
         String accessToken,
         @Schema(description = "令牌类型", example = "Bearer")
         String tokenType,

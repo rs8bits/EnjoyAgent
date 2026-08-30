@@ -7,6 +7,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import jakarta.persistence.LockModeType;
 
 /**
  * 聊天会话仓储接口。
@@ -22,6 +24,9 @@ public interface ChatSessionRepository extends JpaRepository<ChatSession, Long> 
     @EntityGraph(attributePaths = {"tenant", "agent", "createdBy"})
     Page<ChatSession> findAllByTenant_Id(Long tenantId, Pageable pageable);
 
+    @EntityGraph(attributePaths = {"tenant", "agent", "createdBy"})
+    Page<ChatSession> findAllByTenant_IdAndCreatedBy_Id(Long tenantId, Long userId, Pageable pageable);
+
     /**
      * 按 Agent 过滤当前租户下的会话列表。
      */
@@ -31,9 +36,21 @@ public interface ChatSessionRepository extends JpaRepository<ChatSession, Long> 
     @EntityGraph(attributePaths = {"tenant", "agent", "createdBy"})
     Page<ChatSession> findAllByTenant_IdAndAgent_Id(Long tenantId, Long agentId, Pageable pageable);
 
+    @EntityGraph(attributePaths = {"tenant", "agent", "createdBy"})
+    Page<ChatSession> findAllByTenant_IdAndAgent_IdAndCreatedBy_Id(
+            Long tenantId,
+            Long agentId,
+            Long userId,
+            Pageable pageable
+    );
+
     /**
      * 查询当前租户下的单个会话，并预加载运行时需要的 Agent、模型和凭证。
      */
     @EntityGraph(attributePaths = {"tenant", "agent", "agent.modelConfig", "agent.modelConfig.credential", "createdBy"})
     Optional<ChatSession> findByIdAndTenant_Id(Long id, Long tenantId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @EntityGraph(attributePaths = {"tenant", "agent", "createdBy"})
+    Optional<ChatSession> findForUpdateByIdAndTenant_Id(Long id, Long tenantId);
 }

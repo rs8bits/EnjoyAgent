@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 /**
  * MCP OAuth 管理接口。
@@ -35,6 +36,7 @@ public class McpOAuthController {
 
     @Operation(summary = "发起 MCP OAuth 授权", description = "完成元数据发现、生成 PKCE 参数，并返回可跳转的 authorizationUrl")
     @PostMapping("/authorize")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<McpOAuthAuthorizationResponse> startAuthorization(
             @PathVariable Long serverId,
             @Valid @RequestBody StartMcpOAuthAuthorizationRequest request
@@ -47,6 +49,7 @@ public class McpOAuthController {
 
     @Operation(summary = "使用 client credentials 建立 MCP OAuth 连接", description = "适用于无需浏览器回跳的 OAuth 服务器，直接用 client_id/client_secret 换取 access token")
     @PostMapping("/connect-client-credentials")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<McpOAuthConnectionResponse> connectClientCredentials(
             @PathVariable Long serverId,
             @Valid @RequestBody ConnectMcpOAuthClientCredentialsRequest request
@@ -65,6 +68,7 @@ public class McpOAuthController {
 
     @Operation(summary = "断开 MCP OAuth 连接", description = "删除当前 Server 已保存的 OAuth token 与授权状态")
     @DeleteMapping("/connection")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<Void> disconnect(@PathVariable Long serverId) {
         mcpOAuthApplicationService.disconnect(serverId);
         return ApiResponse.success(null, "MCP OAuth connection deleted");

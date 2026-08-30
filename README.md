@@ -1,283 +1,157 @@
-# EnjoyAgent Backend
+# EnjoyAgent
 
-![Java 21](https://img.shields.io/badge/Java-21-orange)
-![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3-green)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-blue)
-![MCP](https://img.shields.io/badge/MCP-ready-purple)
-![RAG](https://img.shields.io/badge/RAG-hybrid%20retrieval-brightgreen)
+[![Java 21](https://img.shields.io/badge/Java-21-orange)](https://openjdk.org/projects/jdk/21/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-6db33f)](https://spring.io/projects/spring-boot)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169e1)](https://www.postgresql.org/)
 
-EnjoyAgent 是一个面向真实业务场景设计的多租户 AI Agent 平台后端。它不只是一个模型 SDK Demo，而是把 Agent 平台里最关键的能力放在同一套可运行的 Spring Boot 工程里：认证、多租户、BYOK、官方模型、RAG、MCP、Workflow、钱包计费、共享市场和管理员审核。
+EnjoyAgent 是一个基于 Spring Boot 的多租户 AI Agent 平台后端。前端仓库见
+[rs8bits/EnjoyAgent-frontend](https://github.com/rs8bits/EnjoyAgent-frontend)。
 
-如果你正在学习或准备搭建一个类似 Dify、Coze、扣子工作流、企业知识库问答或 Agent Marketplace 的系统，这个仓库可以作为一份比较完整的后端参考。
+## 功能
 
-## 项目亮点
-
-- **真实多租户平台骨架**：用户、租户、成员角色、系统管理员、JWT 鉴权和 `/api/admin/**` 权限边界已经串通。
-- **BYOK + 平台官方模型双轨运行**：用户可以接自己的 OpenAI-compatible/百炼模型，平台也可以托管官方模型、价格和凭证。
-- **完整 RAG 主链路**：文档上传、MinIO 存储、切片、embedding、pgvector、Query Rewrite、Rerank、Elasticsearch 混合检索和检索调试信息。
-- **可恢复的异步文档导入**：RabbitMQ + Transactional Outbox 解耦上传与重处理，具备 processing fence、有限重试、parking queue 和断点恢复。
-- **热点链路两级缓存**：Caffeine L1 + Redis L2，结合 generation fencing、Redisson 分布式锁与跨实例失效广播。
-- **MCP 运行时接入**：支持 MCP Server 管理、工具同步、Agent 工具绑定、工具调用日志、OAuth Auth Code + PKCE、Client Credentials 和 token refresh。
-- **可视化 Workflow 后端能力**：支持工作流、节点、连线持久化，测试运行和执行历史，为可拖拽 Agent Workflow 提供后端编排基础。
-- **钱包与异步 token 计费**：官方模型调用会记录价格快照和 token 快照，通过 RabbitMQ 异步写入钱包流水。
-- **共享市场不是弱引用**：Agent、知识库、MCP Server、Workflow 都可以提交市场，管理员审核后用户安装到自己的租户副本中。
-- **工程化边界清晰**：Flyway 管迁移，应用服务承载业务编排，敏感凭证加密存储，日志和响应结构统一。
-
-## 产品截图
-
-这些截图来自 EnjoyAgent 前端，所有核心数据都由本后端 API 驱动。
-
-### 聊天工作台
-
-![img_1.png](img_1.png)
-
-### 可视化工作流
-
-![img_2.png](img_2.png)
-![img.png](img.png)
-
-### 钱包与充值审核
-
-![img_3.png](img_3.png)
-
-## 能力地图
-
-```text
-Auth / Tenant
-  -> Credential
-  -> Model Config / Official Model
-  -> Agent
-  -> Chat Runtime
-  -> RAG
-  -> MCP Tools
-  -> Workflow
-  -> Billing
-  -> Marketplace
-  -> Admin Review
-```
+- 用户认证、租户隔离和管理员权限
+- 用户凭证、官方凭证和 AES-GCM 密钥保护
+- OpenAI 兼容模型与阿里百炼模型配置
+- Agent、会话、SSE 流式聊天和对话记忆
+- 文档上传、MinIO 存储、pgvector 与 Elasticsearch 混合检索
+- MCP Server、工具同步、OAuth、调用审批和调用日志
+- 可视化工作流持久化与执行
+- 钱包、额度预留、模型调用计费和可靠异步事件
+- 共享市场、资产安装和管理员审核
 
 ## 技术栈
 
-- Java 21
-- Spring Boot 3.3
-- Spring Security + JWT
-- Spring Data JPA
-- PostgreSQL + pgvector
-- Redis + Caffeine + Redisson
-- RabbitMQ
-- MinIO
-- Elasticsearch
-- Spring AI
-- Flyway
-- Swagger / OpenAPI
+- Java 21、Spring Boot 3.5、Spring Security、Spring Data JPA
+- Spring AI、JWT、Flyway
+- PostgreSQL + pgvector、Redis + Caffeine + Redisson
+- RabbitMQ、MinIO、Elasticsearch
+- Micrometer、Prometheus、Grafana
 
-## 当前已实现
+## 本地运行
 
-### 平台与权限
+### 环境要求
 
-- 用户注册、登录、JWT 鉴权
-- 多租户隔离
-- 租户成员角色
-- 系统管理员角色
-- 管理端接口权限边界
+- JDK 21
+- Docker 与 Docker Compose
+- macOS、Linux，或支持 Bash 的开发环境
 
-### 模型与凭证
+项目包含 Maven Wrapper，不需要预先安装 Maven。
 
-- 用户凭证管理
-- AES 加密保存密钥
-- 用户模型配置
-- 官方模型配置
-- 官方模型托管凭证
-- 模型调用日志
+### 1. 获取代码和配置
 
-### Agent 与聊天
+```bash
+git clone https://github.com/rs8bits/EnjoyAgent.git
+cd EnjoyAgent
+cp .env.example .env
+```
 
-- Agent CRUD
-- 会话与消息持久化
-- 普通聊天
-- SSE 流式聊天
-- RAG 上下文注入
-- MCP 工具调用
-- 用户模型与官方模型运行时分流
+`.env.example` 中的凭证只适用于 `local` 或 `perf` profile。不要把这些默认值用于
+公网或生产环境。
 
-### 知识库与 RAG
-
-- Knowledge Base / Document / Chunk
-- MinIO 文件存储
-- 文本抽取与切片
-- Embedding 入库
-- HTTP 202 异步导入、Outbox 可靠投递和失败任务重试
-- pgvector 向量检索
-- Elasticsearch 混合检索
-- Query Rewrite
-- Rerank
-- 检索调试信息
-
-### MCP
-
-- MCP Server 注册、编辑、启停
-- Tool 目录同步
-- Agent Tool 绑定
-- MCP Tool 调用日志
-- OAuth Auth Code + PKCE
-- OAuth Client Credentials
-- Access Token 刷新
-
-### Workflow
-
-- Workflow 列表、创建、更新、删除
-- Canvas 节点和连线保存
-- Start / LLM / Knowledge / Tool / Condition / Loop / End 节点模型
-- 工作流测试运行
-- 执行历史记录
-- 工作流提交共享市场和安装复制
-
-### Billing
-
-- 用户钱包
-- 充值单
-- 管理员审核充值
-- 人工调账
-- 官方模型价格快照
-- RabbitMQ 异步 token 计费
-- 钱包流水
-
-### Marketplace
-
-- 提交 Agent / Knowledge Base / MCP Server / Workflow
-- 管理员审核、驳回、下架
-- 已上架资产列表
-- 市场资产安装
-- Agent 安装时复制知识库和 MCP 依赖
-- Workflow 安装时复制节点、连线，并提示需要重绑定的租户级资源
-
-## 快速启动
-
-### 1. 启动基础设施
+### 2. 启动基础设施
 
 ```bash
 docker compose up -d
+docker compose ps
 ```
 
-`compose.yml` 会启动：
+Compose 默认仅把服务绑定到 `127.0.0.1`：
 
-```text
-PostgreSQL      localhost:5432
-Redis           localhost:6379
-MinIO API       http://localhost:9000
-MinIO Console   http://localhost:9001
-RabbitMQ        localhost:5672
-RabbitMQ UI     http://localhost:15672
-Elasticsearch   http://localhost:9200
-Prometheus      http://localhost:9090
-Grafana         http://localhost:3000
-```
+| 服务 | 地址 |
+| --- | --- |
+| PostgreSQL | `localhost:5432` |
+| Redis | `localhost:6379` |
+| MinIO API / Console | `localhost:9000` / `localhost:9001` |
+| RabbitMQ / 管理台 | `localhost:5672` / `localhost:15672` |
+| Elasticsearch | `localhost:9200` |
+| Prometheus / Grafana | `localhost:9090` / `localhost:3000` |
 
-### 2. 准备环境变量
+### 3. 启动应用
 
 ```bash
-cp .env.example .env
 set -a
 source .env
 set +a
+SPRING_PROFILES_ACTIVE=local ./mvnw spring-boot:run
 ```
 
-Docker Compose 会自动读取 `.env`，但直接启动的 Spring Boot 进程不会；因此需要先将变量导出到当前 shell。默认配置已经适配本地 Docker 依赖，你可以按需修改模型网关、官方模型 key、MinIO、RabbitMQ、Elasticsearch 等配置。
+常用地址：
 
-`.env.example` 中的数据库、RabbitMQ、MinIO、JWT 和 AES 值只适用于本地开发，生产环境必须替换。
+| 服务 | 地址 |
+| --- | --- |
+| API | `http://localhost:8080` |
+| 健康检查 | `http://localhost:8080/actuator/health` |
+| Swagger UI | `http://localhost:8080/swagger-ui.html` |
 
-### 3. 启动后端
+## 测试与构建
 
 ```bash
-mvn spring-boot:run
+./mvnw test
+./mvnw clean package
 ```
 
-默认地址：
+构建产物位于 `target/enjoy-agent-0.0.1-SNAPSHOT.jar`。
+
+## 配置
+
+完整的本地示例见 [.env.example](.env.example)，主要配置分为：
+
+- `DB_*`、`REDIS_*`、`RABBITMQ_*`：数据和消息服务
+- `MINIO_*`、`APP_KNOWLEDGE_*`：文件存储和知识库处理
+- `APP_JWT_*`、`APP_CREDENTIAL_*`：认证与凭证加密
+- `APP_MCP_*`：MCP 运行时、OAuth 和高风险工具审批
+- `APP_BILLING_*`：钱包、额度预留和异步计费
+- `APP_CACHE_*`：本地缓存、Redis 缓存和失效广播
+
+模型供应商密钥由用户或管理员通过 API 写入并加密存储，不应直接提交到仓库。
+
+## 生产安全
+
+部署到公网前至少需要：
+
+- 为 JWT、凭证加密和 MCP 审批分别生成高强度随机密钥
+- 更换 PostgreSQL、RabbitMQ、MinIO、Grafana 等默认密码
+- 设置 `SERVER_ADDRESS=127.0.0.1`，仅通过 HTTPS 反向代理暴露应用
+- 精确配置允许的浏览器 Origin，并启用 `Secure` Cookie
+- 关闭 Swagger、公共开发端点和不需要的 Actuator 端点
+- 对数据库、对象存储和消息队列建立备份与恢复流程
+
+`local` profile 包含便于开发的默认值，不适合直接暴露到公网。
+
+## 数据库迁移
+
+应用启动时由 Flyway 自动执行 `src/main/resources/db/migration` 中的迁移。升级已有环境前，
+请先备份 PostgreSQL 和 MinIO 数据。
+
+## 可观测性与性能
+
+Compose 包含 Prometheus、Grafana、PostgreSQL Exporter 和 Redis Exporter。性能测试、
+故障演练及调优说明位于：
+
+- [performance/jmeter/README.md](performance/jmeter/README.md)
+- [performance/fault-injection/README.md](performance/fault-injection/README.md)
+- [performance/tuning/README.md](performance/tuning/README.md)
+
+## 目录结构
 
 ```text
-API      http://localhost:8080
-Swagger  http://localhost:8080/swagger-ui.html
+src/main/java/com/enjoy/agent
+├── agent          Agent 管理
+├── auth           认证与租户
+├── billing        钱包与计费
+├── chat           会话与聊天
+├── credential     凭证
+├── knowledge      知识库与检索
+├── market         共享市场
+├── mcp            MCP 运行时
+├── model          模型配置
+├── modelgateway   模型调用网关
+├── shared         通用安全、缓存和基础设施
+└── workflow       工作流
 ```
 
-## 可观测性与性能基线
+## 相关文档
 
-`compose.yml` 已包含 Prometheus、Grafana、PostgreSQL Exporter、Redis Exporter，并为 RabbitMQ 开启 Prometheus 插件。应用运行后可访问：
-
-```text
-Actuator Health  http://localhost:8080/actuator/health
-Prometheus API   http://localhost:8080/actuator/prometheus
-Prometheus UI    http://localhost:9090
-Grafana          http://localhost:3000
-```
-
-Grafana 会自动加载 `EnjoyAgent Baseline` 仪表盘。正式压测不要使用默认 `local` profile，也不要使用 `mvn spring-boot:run`；先构建一次，再让所有 A/B 组复用同一份 JAR：
-
-```bash
-mvn clean package
-SPRING_PROFILES_ACTIVE=perf \
-java -Xms1g -Xmx1g -XX:+UseG1GC \
-  -jar target/enjoy-agent-0.0.1-SNAPSHOT.jar
-```
-
-HTTP 基线使用 Apache JMeter 5.6.3，并统一通过非 GUI 模式执行。脚本、场景和结果规范见 [performance/jmeter/README.md](performance/jmeter/README.md)，示例：
-
-```bash
-PERF_SCENARIO=auth-me \
-PERF_THREADS=50 \
-PERF_TARGET_RPM=12000 \
-PERF_WARMUP_SECONDS=120 \
-PERF_DURATION_SECONDS=900 \
-./performance/jmeter/run-baseline.sh
-```
-
-每次测试先单独预热，再生成正式测量的 JTL 与 HTML 报告；同时使用 Grafana 对齐查看 HTTP、JWT 成员查询、Hikari、JVM、Redis、RabbitMQ 及文档入库阶段指标。
-
-阶段 4 把构建、基础设施、五类故障演练和异步导入参数矩阵串成一个入口。它会恢复执行前的容器启停状态，不删除数据卷：
-
-```bash
-JMETER_BIN=/absolute/path/to/apache-jmeter-5.6.3/bin/jmeter \
-MAVEN_BIN=/absolute/path/to/mvn \
-./performance/run-stage4.sh all
-```
-
-只运行单项时，把 `all` 换成 `faults` 或 `tuning`。故障演练、参数矩阵与指标解释分别见
-[fault-injection](performance/fault-injection/README.md) 和 [tuning](performance/tuning/README.md)。
-
-## 推荐联调顺序
-
-1. 注册用户并登录
-2. 创建凭证
-3. 创建聊天模型和 embedding 模型
-4. 创建知识库并上传文档
-5. 创建 Agent，绑定模型和知识库
-6. 发起聊天，查看 RAG 命中与模型调用日志
-7. 配置 MCP Server，同步工具并绑定 Agent
-8. 创建工作流并测试运行
-9. 提交资产到共享市场
-10. 使用管理员审核市场资产和充值单
-
-## 待开发路线图
-
-- **集成测试固化**：把认证、RAG、MCP、Workflow、Billing、Marketplace 主链整理成可重复执行的 smoke tests。
-- **市场版本系统**：支持资产版本、更新说明、安装升级和兼容性提示。
-- **市场安装异步化**：知识库文档复制、索引重建、MCP 安装等长任务改为可追踪任务。
-- **更细权限模型**：从 `USER / ADMIN` 演进到可配置 RBAC，例如审核员、运营、财务、只读管理员。
-- **Workflow Runtime 增强**：节点级重试、运行日志可视化、失败恢复、变量面板、调试断点。
-- **审计与观测**：补充管理员操作审计、模型调用统计、工具调用统计和计费事件追踪。
-- **部署模板**：补 Docker app 服务、生产环境 profile、反向代理和对象存储配置说明。
-
-## 文档
-
-- [Agent.md](./Agent.md)：架构说明、核心设计取舍和协作原则
-- [Plan.md](./Plan.md)：后续路线图和工程化优先级
-- [缓存与异步导入可靠性架构](docs/architecture/reliability-and-performance.md)：一致性边界、状态机与调优参数
-- [阶段 2/3 性能报告](docs/performance/stage2-stage3-report.md)：三轮 JMeter A/B 数据与测试边界
-- [阶段 4 故障与调优报告](docs/performance/stage4-report.md)：故障演练证据与参数矩阵结论
-
-## 适合谁看
-
-- 想系统学习 Agent 平台后端设计的人
-- 想把 RAG、MCP、Workflow、计费、市场放进一个真实项目里的人
-- 想从 Demo 走向可运营 AI 平台的人
-
-EnjoyAgent 的目标不是把每个功能都做成最复杂，而是把 AI Agent 平台最难串起来的主链路，尽量用清晰、可读、可运行的代码呈现出来。
+- [Agent.md](Agent.md)：架构与协作约定
+- [docs/architecture/reliability-and-performance.md](docs/architecture/reliability-and-performance.md)：可靠性与性能设计
+- [docs/performance/stage4-report.md](docs/performance/stage4-report.md)：故障演练与参数调优结果

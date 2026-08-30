@@ -20,6 +20,7 @@ import jakarta.validation.constraints.NotNull;
 import java.util.Map;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -59,6 +60,7 @@ public class WorkflowController {
 
     @Operation(summary = "创建工作流")
     @PostMapping
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<WorkflowResponse> createWorkflow(@Valid @RequestBody CreateWorkflowRequest request) {
         return ApiResponse.success(workflowApplicationService.createWorkflow(request), "工作流创建成功");
     }
@@ -71,12 +73,14 @@ public class WorkflowController {
 
     @Operation(summary = "更新工作流")
     @PutMapping("/{id}")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<WorkflowResponse> updateWorkflow(@PathVariable Long id, @Valid @RequestBody UpdateWorkflowRequest request) {
         return ApiResponse.success(workflowApplicationService.updateWorkflow(id, request), "工作流更新成功");
     }
 
     @Operation(summary = "删除工作流")
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<Void> deleteWorkflow(@PathVariable Long id) {
         workflowApplicationService.deleteWorkflow(id);
         return ApiResponse.success(null, "工作流已删除");
@@ -90,6 +94,7 @@ public class WorkflowController {
 
     @Operation(summary = "保存画布数据")
     @PutMapping("/{id}/canvas")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<WorkflowCanvasResponse> saveCanvas(
             @PathVariable Long id,
             @Valid @RequestBody SaveWorkflowCanvasRequest request
@@ -99,17 +104,27 @@ public class WorkflowController {
 
     @Operation(summary = "测试运行工作流", description = "以 SSE 流式返回每个节点的执行结果")
     @PostMapping("/{id}/test-run")
+    @PreAuthorize("hasRole('OWNER')")
     public SseEmitter testRun(
             @PathVariable Long id,
             @Valid @RequestBody TestRunRequest request
     ) {
-        SseEmitter emitter = new SseEmitter(0L);
+        SseEmitter emitter = new SseEmitter(workflowOrchestratorService.testRunTimeoutMs());
         workflowOrchestratorService.testRun(id, request.userInput(), request.modelConfigId(), request.canvas(), emitter);
         return emitter;
     }
 
+    @Operation(summary = "取消工作流测试运行")
+    @PostMapping("/executions/{executionId}/cancel")
+    @PreAuthorize("hasRole('OWNER')")
+    public ApiResponse<Void> cancelExecution(@PathVariable Long executionId) {
+        workflowOrchestratorService.cancelTestRun(executionId);
+        return ApiResponse.success(null, "工作流执行已取消");
+    }
+
     @Operation(summary = "获取工作流执行历史")
     @GetMapping("/{id}/executions")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<PagedResponse<Map<String, Object>>> listExecutions(
             @PathVariable Long id, Pageable pageable) {
         Long tenantId = CurrentUserContext.requireCurrentUser().tenantId();

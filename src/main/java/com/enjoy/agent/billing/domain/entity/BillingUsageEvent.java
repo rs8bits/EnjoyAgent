@@ -64,6 +64,9 @@ public class BillingUsageEvent extends BaseEntity {
     @Column(name = "calculated_amount", nullable = false, precision = 18, scale = 6)
     private BigDecimal calculatedAmount = BigDecimal.ZERO;
 
+    @Column(name = "usage_estimated", nullable = false)
+    private Boolean usageEstimated = false;
+
     @Column(name = "currency", nullable = false, length = 16)
     private String currency;
 
@@ -76,6 +79,15 @@ public class BillingUsageEvent extends BaseEntity {
 
     @Column(name = "error_message", length = 1000)
     private String errorMessage;
+
+    @Column(name = "reservation_id")
+    private Long reservationId;
+
+    @Column(name = "processing_attempts", nullable = false)
+    private Integer processingAttempts = 0;
+
+    @Column(name = "next_retry_at")
+    private Instant nextRetryAt;
 
     public Long getId() {
         return id;
@@ -181,6 +193,14 @@ public class BillingUsageEvent extends BaseEntity {
         this.calculatedAmount = calculatedAmount;
     }
 
+    public Boolean getUsageEstimated() {
+        return usageEstimated;
+    }
+
+    public void setUsageEstimated(Boolean usageEstimated) {
+        this.usageEstimated = usageEstimated;
+    }
+
     public String getCurrency() {
         return currency;
     }
@@ -212,4 +232,11 @@ public class BillingUsageEvent extends BaseEntity {
     public void setErrorMessage(String errorMessage) {
         this.errorMessage = errorMessage;
     }
+
+    public Long getReservationId() { return reservationId; }
+    public void setReservationId(Long reservationId) { this.reservationId = reservationId; }
+    public Integer getProcessingAttempts() { return processingAttempts; }
+    public void setProcessingAttempts(Integer processingAttempts) { this.processingAttempts = processingAttempts; }
+    public Instant getNextRetryAt() { return nextRetryAt; }
+    public void setNextRetryAt(Instant nextRetryAt) { this.nextRetryAt = nextRetryAt; }
 }

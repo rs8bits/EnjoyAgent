@@ -2,12 +2,12 @@ package com.enjoy.agent.knowledge.application;
 
 import com.enjoy.agent.knowledge.api.response.KnowledgeDocumentResponse;
 import com.enjoy.agent.knowledge.domain.entity.KnowledgeBase;
-import com.enjoy.agent.knowledge.domain.entity.KnowledgeChunk;
 import com.enjoy.agent.knowledge.domain.entity.KnowledgeDocument;
 import com.enjoy.agent.knowledge.domain.enums.KnowledgeDocumentStatus;
 import com.enjoy.agent.knowledge.infrastructure.persistence.KnowledgeChunkJdbcRepository;
 import com.enjoy.agent.knowledge.infrastructure.persistence.KnowledgeChunkRepository;
 import com.enjoy.agent.knowledge.infrastructure.persistence.KnowledgeDocumentRepository;
+import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
@@ -16,6 +16,11 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.time.Clock;
 import java.time.Instant;
+import java.io.InputStream;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -50,7 +55,9 @@ public class KnowledgeDocumentApplicationService {
     private final DocumentChunker documentChunker;
     private final EmbeddingGatewayService embeddingGatewayService;
     private final KnowledgeIngestOutboxService knowledgeIngestOutboxService;
+    private final KnowledgeDocumentCleanupService knowledgeDocumentCleanupService;
     private final KnowledgeIngestProperties knowledgeIngestProperties;
+    private final KnowledgeProperties knowledgeProperties;
     private final TransactionTemplate transactionTemplate;
     private final MeterRegistry meterRegistry;
     private final Clock clock;
@@ -68,7 +75,9 @@ public class KnowledgeDocumentApplicationService {
             DocumentChunker documentChunker,
             EmbeddingGatewayService embeddingGatewayService,
             KnowledgeIngestOutboxService knowledgeIngestOutboxService,
+            KnowledgeDocumentCleanupService knowledgeDocumentCleanupService,
             KnowledgeIngestProperties knowledgeIngestProperties,
+            KnowledgeProperties knowledgeProperties,
             TransactionTemplate transactionTemplate,
             MeterRegistry meterRegistry,
             Clock clock
@@ -83,7 +92,21 @@ public class KnowledgeDocumentApplicationService {
         this.documentChunker = documentChunker;
         this.embeddingGatewayService = embeddingGatewayService;
         this.knowledgeIngestOutboxService = knowledgeIngestOutboxService;
+        this.knowledgeDocumentCleanupService = knowledgeDocumentCleanupService;
         this.knowledgeIngestProperties = knowledgeIngestProperties;
+        this.knowledgeProperties = knowledgeProperties;
+        if (knowledgeProperties.getExtractionTimeout()
+                .compareTo(knowledgeIngestProperties.getProcessingLeaseDuration()) >= 0) {
+            throw new IllegalArgumentException(
+                    "Knowledge extraction timeout must be shorter than the processing lease duration"
+            );
+        }
+        if (knowledgeProperties.getEmbeddingRequestTimeout()
+                .compareTo(knowledgeIngestProperties.getProcessingLeaseDuration()) >= 0) {
+            throw new IllegalArgumentException(
+                    "Knowledge embedding request timeout must be shorter than the processing lease duration"
+            );
+        }
         this.transactionTemplate = transactionTemplate;
         this.meterRegistry = meterRegistry;
         this.clock = clock;
@@ -103,7 +126,34 @@ public class KnowledgeDocumentApplicationService {
      */
     public KnowledgeDocumentResponse uploadDocument(Long knowledgeBaseId, MultipartFile file) {
         validateFile(file);
+        validateFileSize(file.getSize());
         try {
+            if (knowledgeIngestProperties.isAsyncEnabled()) {
+                CurrentUserContext.requireCurrentUser();
+                KnowledgeBase knowledgeBase = knowledgeBaseApplicationService.requireRunnableKnowledgeBase(knowledgeBaseId);
+                String fileName = Objects.requireNonNullElse(file.getOriginalFilename(), "document.bin");
+                fileSizeSummary.record(file.getSize());
+                StoredObjectInfo storedObject;
+                MessageDigest digest = sha256Digest();
+                try (InputStream inputStream = file.getInputStream();
+                     DigestInputStream digestInputStream = new DigestInputStream(inputStream, digest)) {
+                    storedObject = recordPhase("storage_upload", () -> minioStorageService.uploadKnowledgeDocument(
+                            knowledgeBaseId,
+                            fileName,
+                            file.getContentType(),
+                            digestInputStream,
+                            file.getSize()
+                    ));
+                }
+                return enqueueStoredDocument(
+                        knowledgeBase,
+                        fileName,
+                        file.getContentType(),
+                        file.getSize(),
+                        HexFormat.of().formatHex(digest.digest()),
+                        storedObject
+                );
+            }
             return uploadDocumentFromBytes(
                     knowledgeBaseId,
                     Objects.requireNonNullElse(file.getOriginalFilename(), "document.bin"),
@@ -126,8 +176,13 @@ public class KnowledgeDocumentApplicationService {
             String contentType,
             byte[] fileBytes
     ) {
+        if (fileBytes == null) {
+            throw new ApiException("DOCUMENT_FILE_EMPTY", "Uploaded file is empty", HttpStatus.BAD_REQUEST);
+        }
+        validateFileSize(fileBytes.length);
         CurrentUserContext.requireCurrentUser();
         KnowledgeBase knowledgeBase = knowledgeBaseApplicationService.requireRunnableKnowledgeBase(knowledgeBaseId);
+        String contentSha256 = sha256(fileBytes);
 
         String resolvedFilename = Objects.requireNonNullElse(originalFilename, "document.bin");
         fileSizeSummary.record(fileBytes.length);
@@ -159,8 +214,18 @@ public class KnowledgeDocumentApplicationService {
             rollbackCompensation.registerIfTransactionActive();
             MinioRollbackCompensation transactionRollbackCompensation = rollbackCompensation;
 
-            KnowledgeDocument document = requireTransactionResult(transactionTemplate.execute(status -> {
+            SyncCreateResult createResult = requireTransactionResult(transactionTemplate.execute(status -> {
                 transactionRollbackCompensation.registerIfTransactionActive();
+                knowledgeDocumentRepository.lockTenantForImport(knowledgeBase.getTenant().getId());
+                KnowledgeDocument duplicate = knowledgeDocumentRepository
+                        .findByTenant_IdAndKnowledgeBase_IdAndContentSha256(
+                                knowledgeBase.getTenant().getId(), knowledgeBaseId, contentSha256)
+                        .orElse(null);
+                if (duplicate != null) {
+                    requireDuplicateNotDeleting(duplicate);
+                    return new SyncCreateResult(duplicate, true);
+                }
+                requireTenantImportCapacity(knowledgeBase.getTenant().getId(), fileBytes.length);
                 KnowledgeDocument knowledgeDocument = new KnowledgeDocument();
                 knowledgeDocument.setTenant(knowledgeBase.getTenant());
                 knowledgeDocument.setKnowledgeBase(knowledgeBase);
@@ -169,10 +234,20 @@ public class KnowledgeDocumentApplicationService {
                 knowledgeDocument.setFileSize((long) fileBytes.length);
                 knowledgeDocument.setStorageBucket(uploadedObject.bucket());
                 knowledgeDocument.setStorageObjectKey(uploadedObject.objectKey());
+                knowledgeDocument.setContentSha256(contentSha256);
                 knowledgeDocument.setStatus(KnowledgeDocumentStatus.PROCESSING);
                 knowledgeDocument.setChunkCount(0);
-                return knowledgeDocumentRepository.saveAndFlush(knowledgeDocument);
+                return new SyncCreateResult(
+                        knowledgeDocumentRepository.saveAndFlush(knowledgeDocument),
+                        false
+                );
             }));
+            if (createResult.duplicate()) {
+                rollbackCompensation.cleanupOnce(createResult.document().getId());
+                outcome = "duplicate";
+                return toResponse(createResult.document());
+            }
+            KnowledgeDocument document = createResult.document();
             documentId = document.getId();
 
             try {
@@ -188,25 +263,28 @@ public class KnowledgeDocumentApplicationService {
                 }
                 chunkCountSummary.record(chunks.size());
 
+                reserveSynchronousChunkQuota(
+                        document.getId(),
+                        knowledgeBase.getTenant().getId(),
+                        chunks.size()
+                );
                 PreparedKnowledgeBase preparedKnowledgeBase = knowledgeBaseApplicationService.snapshotKnowledgeBase(knowledgeBase);
-                List<float[]> embeddings = recordPhase("embedding", () ->
-                        embeddingGatewayService.embedTexts(preparedKnowledgeBase.embeddingModelConfig(), chunks));
-
-                List<KnowledgeChunkRow> rows = new ArrayList<>(chunks.size());
-                for (int i = 0; i < chunks.size(); i++) {
-                    rows.add(new KnowledgeChunkRow(i, chunks.get(i), embeddings.get(i)));
-                }
-
-                List<KnowledgeChunk> persistedChunks = recordPhase("database_persist", () ->
-                        requireTransactionResult(transactionTemplate.execute(status ->
-                                persistDocumentChunks(document.getId(), rows)
-                        )));
-                recordPhase("search_index", () -> {
-                    knowledgeSearchIndexer.indexDocumentChunks(document, persistedChunks, rows);
+                recordPhase("embedding_database_persist", () -> {
+                    embedAndPersistChunkBatches(
+                            document.getId(),
+                            knowledgeBase.getTenant().getId(),
+                            knowledgeBase.getId(),
+                            chunks,
+                            preparedKnowledgeBase.embeddingModelConfig(),
+                            null
+                    );
                     return null;
                 });
+                if (knowledgeSearchIndexer.isEnabled()) {
+                    recordPhase("search_index", () -> indexDocumentInPages(document.getId()));
+                }
                 KnowledgeDocumentResponse response = requireTransactionResult(transactionTemplate.execute(status ->
-                        markDocumentReady(document.getId(), rows.size())
+                        markDocumentReady(document.getId(), chunks.size())
                 ));
                 outcome = "success";
                 return response;
@@ -256,29 +334,64 @@ public class KnowledgeDocumentApplicationService {
                         contentType,
                         fileBytes
                 ));
+        return enqueueStoredDocument(
+                knowledgeBase,
+                resolvedFilename,
+                contentType,
+                fileBytes.length,
+                sha256(fileBytes),
+                storedObject
+        );
+    }
+
+    private KnowledgeDocumentResponse enqueueStoredDocument(
+            KnowledgeBase knowledgeBase,
+            String resolvedFilename,
+            String contentType,
+            long fileSize,
+            String contentSha256,
+            StoredObjectInfo storedObject
+    ) {
         MinioRollbackCompensation rollbackCompensation = new MinioRollbackCompensation(storedObject);
         rollbackCompensation.registerIfTransactionActive();
         AtomicBoolean transactionReturned = new AtomicBoolean(false);
         try {
-            KnowledgeDocument document = requireTransactionResult(transactionTemplate.execute(status -> {
+            EnqueueResult result = requireTransactionResult(transactionTemplate.execute(status -> {
                 rollbackCompensation.registerIfTransactionActive();
+                knowledgeDocumentRepository.lockTenantForImport(knowledgeBase.getTenant().getId());
+                KnowledgeDocument duplicate = knowledgeDocumentRepository
+                        .findByTenant_IdAndKnowledgeBase_IdAndContentSha256(
+                                knowledgeBase.getTenant().getId(),
+                                knowledgeBase.getId(),
+                                contentSha256
+                        )
+                        .orElse(null);
+                if (duplicate != null) {
+                    requireDuplicateNotDeleting(duplicate);
+                    return new EnqueueResult(duplicate, true);
+                }
+                requireTenantImportCapacity(knowledgeBase.getTenant().getId(), fileSize);
                 KnowledgeDocument queued = new KnowledgeDocument();
                 queued.setTenant(knowledgeBase.getTenant());
                 queued.setKnowledgeBase(knowledgeBase);
                 queued.setFileName(resolvedFilename);
                 queued.setContentType(contentType);
-                queued.setFileSize((long) fileBytes.length);
+                queued.setFileSize(fileSize);
                 queued.setStorageBucket(storedObject.bucket());
                 queued.setStorageObjectKey(storedObject.objectKey());
+                queued.setContentSha256(contentSha256);
                 queued.setStatus(KnowledgeDocumentStatus.QUEUED);
                 queued.setChunkCount(0);
                 queued.setProcessingAttempts(0);
                 KnowledgeDocument saved = knowledgeDocumentRepository.saveAndFlush(queued);
                 knowledgeIngestOutboxService.enqueue(saved.getId(), 1, Instant.now(clock));
-                return saved;
+                return new EnqueueResult(saved, false);
             }));
             transactionReturned.set(true);
-            return toResponse(document);
+            if (result.duplicate()) {
+                rollbackCompensation.cleanupOnce(result.document().getId());
+            }
+            return toResponse(result.document());
         } catch (RuntimeException ex) {
             if (!transactionReturned.get()) {
                 rollbackCompensation.cleanupIfNotRegistered(null);
@@ -312,30 +425,30 @@ public class KnowledgeDocumentApplicationService {
         try {
             if (workItem.resumeIndexOnly()) {
                 assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem);
-                List<KnowledgeChunkSearchDocument> searchDocuments = recordPhase("database_load", () ->
-                        knowledgeChunkJdbcRepository.findSearchDocumentsByDocumentId(documentId));
-                requireIndexableChunks(searchDocuments);
-                assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem);
-                recordPhase("search_index", () -> {
-                    knowledgeSearchIndexer.indexSearchDocuments(searchDocuments);
-                    return null;
-                });
+                int indexedChunks = knowledgeSearchIndexer.isEnabled()
+                        ? recordPhase("search_index", () -> indexAsyncDocumentInPages(
+                                documentId,
+                                deliveryAttempt,
+                                workItem
+                        ))
+                        : workItem.chunkCount();
                 assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem);
                 requireTransactionResult(transactionTemplate.execute(status ->
-                        markAsyncDocumentReady(documentId, deliveryAttempt, workItem, searchDocuments.size())
+                        markAsyncDocumentReady(documentId, deliveryAttempt, workItem, indexedChunks)
                 ));
                 outcome = "success";
                 return;
             }
 
             assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem);
-            byte[] fileBytes = recordPhase("storage_download", () ->
-                    minioStorageService.downloadObject(workItem.storageBucket(), workItem.storageObjectKey()));
-            assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem);
-            String text = recordPhase("text_extract", () -> documentTextExtractor.extractText(
-                    workItem.fileName(),
-                    workItem.contentType(),
-                    fileBytes
+            validateFileSize(workItem.fileSize());
+            String text = recordPhase("storage_download_text_extract", () -> minioStorageService.readObject(
+                    workItem.storageBucket(),
+                    workItem.storageObjectKey(),
+                    stream -> {
+                        assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem);
+                        return documentTextExtractor.extractText(workItem.fileName(), workItem.contentType(), stream);
+                    }
             ));
             assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem);
             if (text == null || text.isBlank()) {
@@ -353,32 +466,28 @@ public class KnowledgeDocumentApplicationService {
                     workItem.knowledgeBaseId()
             );
             PreparedKnowledgeBase preparedKnowledgeBase = knowledgeBaseApplicationService.snapshotKnowledgeBase(knowledgeBase);
-            assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem);
-            List<float[]> embeddings = recordPhase("embedding", () ->
-                    embeddingGatewayService.embedTexts(preparedKnowledgeBase.embeddingModelConfig(), chunks));
-            assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem);
-
-            List<KnowledgeChunkRow> rows = new ArrayList<>(chunks.size());
-            for (int i = 0; i < chunks.size(); i++) {
-                rows.add(new KnowledgeChunkRow(i, chunks.get(i), embeddings.get(i)));
-            }
-
-            recordPhase("database_persist", () ->
-                    requireTransactionResult(transactionTemplate.execute(status ->
-                            persistAsyncDocumentChunks(documentId, deliveryAttempt, workItem, rows)
-                    )));
-            assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem);
-            List<KnowledgeChunkSearchDocument> searchDocuments = recordPhase("database_load", () ->
-                    knowledgeChunkJdbcRepository.findSearchDocumentsByDocumentId(documentId));
-            requireIndexableChunks(searchDocuments);
-            assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem);
-            recordPhase("search_index", () -> {
-                knowledgeSearchIndexer.indexSearchDocuments(searchDocuments);
+            reserveAsyncChunkQuota(documentId, deliveryAttempt, workItem, chunks.size());
+            recordPhase("embedding_database_persist", () -> {
+                embedAndPersistChunkBatches(
+                        documentId,
+                        workItem.tenantId(),
+                        workItem.knowledgeBaseId(),
+                        chunks,
+                        preparedKnowledgeBase.embeddingModelConfig(),
+                        new AsyncBatchOwnership(deliveryAttempt, workItem)
+                );
                 return null;
             });
+            requireTransactionResult(transactionTemplate.execute(status ->
+                    markAsyncDocumentIndexing(documentId, deliveryAttempt, workItem)
+            ));
+            assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem);
+            if (knowledgeSearchIndexer.isEnabled()) {
+                recordPhase("search_index", () -> indexAsyncDocumentInPages(documentId, deliveryAttempt, workItem));
+            }
             assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem);
             requireTransactionResult(transactionTemplate.execute(status ->
-                    markAsyncDocumentReady(documentId, deliveryAttempt, workItem, rows.size())
+                    markAsyncDocumentReady(documentId, deliveryAttempt, workItem, chunks.size())
             ));
             outcome = "success";
         } finally {
@@ -456,6 +565,41 @@ public class KnowledgeDocumentApplicationService {
     }
 
     /**
+     * Reclaims work whose worker disappeared without ACK/failure handling. Fencing makes any late worker stale.
+     */
+    public int reapExpiredProcessingLeases() {
+        Integer recovered = transactionTemplate.execute(status -> {
+            Instant now = Instant.now(clock);
+            List<KnowledgeDocument> expired = knowledgeDocumentRepository.findExpiredProcessingLeasesForUpdate(
+                    now,
+                    knowledgeIngestProperties.getLeaseReaperBatchSize()
+            );
+            for (KnowledgeDocument document : expired) {
+                int completedAttempt = Objects.requireNonNullElse(document.getProcessingAttempts(), 0);
+                document.setLastErrorCode("PROCESSING_LEASE_EXPIRED");
+                document.setLastErrorMessage("Document worker lease expired before completion");
+                document.setProcessingFence(Objects.requireNonNullElse(document.getProcessingFence(), 0L) + 1L);
+                clearProcessingOwnership(document);
+                if (knowledgeIngestProperties.isLastAttemptInCycle(completedAttempt)) {
+                    document.setStatus(KnowledgeDocumentStatus.FAILED);
+                    document.setNextRetryAt(null);
+                    document.setCompletedAt(now);
+                } else {
+                    int nextAttempt = completedAttempt + 1;
+                document.setStatus(document.getStatus() == KnowledgeDocumentStatus.INDEXING
+                        ? KnowledgeDocumentStatus.INDEXING
+                        : KnowledgeDocumentStatus.RETRYING);
+                    document.setNextRetryAt(now);
+                    knowledgeIngestOutboxService.enqueue(document.getId(), nextAttempt, now);
+                }
+                knowledgeDocumentRepository.save(document);
+            }
+            return expired.size();
+        });
+        return Objects.requireNonNullElse(recovered, 0);
+    }
+
+    /**
      * 手工重试一个已经进入 parking 状态的文档，开启新一轮有限重试。
      */
     public KnowledgeDocumentResponse retryFailedDocument(Long knowledgeBaseId, Long documentId) {
@@ -495,7 +639,11 @@ public class KnowledgeDocumentApplicationService {
      */
     public Page<KnowledgeDocumentResponse> listDocuments(Long knowledgeBaseId, Pageable pageable) {
         knowledgeBaseApplicationService.requireRunnableKnowledgeBase(knowledgeBaseId);
-        return knowledgeDocumentRepository.findAllByKnowledgeBase_Id(knowledgeBaseId, pageable)
+        return knowledgeDocumentRepository.findAllByKnowledgeBase_IdAndStatusNot(
+                        knowledgeBaseId,
+                        KnowledgeDocumentStatus.DELETING,
+                        pageable
+                )
                 .map(this::toResponse);
     }
 
@@ -525,16 +673,14 @@ public class KnowledgeDocumentApplicationService {
                     HttpStatus.BAD_REQUEST
             );
         }
-        List<KnowledgeChunkSearchDocument> searchDocuments =
-                knowledgeChunkJdbcRepository.findSearchDocumentsByDocumentId(document.getId());
-        if (searchDocuments.isEmpty()) {
+        int indexedChunks = indexDocumentInPages(document.getId());
+        if (indexedChunks == 0) {
             throw new ApiException(
                     "KNOWLEDGE_DOCUMENT_CHUNKS_EMPTY",
                     "Knowledge document does not contain indexable chunks",
                     HttpStatus.BAD_REQUEST
             );
         }
-        knowledgeSearchIndexer.indexSearchDocuments(searchDocuments);
         return toResponse(document);
     }
 
@@ -542,43 +688,129 @@ public class KnowledgeDocumentApplicationService {
      * 删除知识库文档。
      */
     public void deleteDocument(Long knowledgeBaseId, Long documentId) {
-        KnowledgeDocument document = requireTenantOwnedDocument(knowledgeBaseId, documentId);
-        if (isActiveProcessingStatus(document.getStatus())) {
-            throw new ApiException(
-                    "KNOWLEDGE_DOCUMENT_PROCESSING",
-                    "A queued or processing document cannot be deleted",
-                    HttpStatus.CONFLICT
-            );
-        }
+        AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
         transactionTemplate.executeWithoutResult(status -> {
+            KnowledgeDocument document = knowledgeDocumentRepository.findOwnedByIdForUpdate(
+                            documentId,
+                            knowledgeBaseId,
+                            currentUser.tenantId()
+                    )
+                    .orElseThrow(() -> new ApiException(
+                            "KNOWLEDGE_DOCUMENT_NOT_FOUND",
+                            "Knowledge document not found",
+                            HttpStatus.NOT_FOUND
+                    ));
+            if (document.getStatus() == KnowledgeDocumentStatus.DELETING) {
+                return;
+            }
+            // Tombstoning is also the cancellation fence for queued/in-flight workers. A late
+            // worker will fail its token/fence/status ownership check before committing more data.
             knowledgeChunkRepository.deleteAllByDocument_Id(document.getId());
-            knowledgeDocumentRepository.delete(document);
+            knowledgeChunkRepository.flush();
+            document.setStatus(KnowledgeDocumentStatus.DELETING);
+            document.setCompletedAt(null);
+            document.setNextRetryAt(null);
+            document.setContentSha256(null);
+            document.setProcessingFence(Objects.requireNonNullElse(document.getProcessingFence(), 0L) + 1L);
+            clearProcessingOwnership(document);
+            knowledgeDocumentRepository.save(document);
+            knowledgeDocumentCleanupService.enqueue(
+                    document.getId(),
+                    document.getStorageBucket(),
+                    document.getStorageObjectKey()
+            );
         });
-        cleanupSearchIndexQuietly(document.getId());
-        minioStorageService.removeObject(document.getStorageBucket(), document.getStorageObjectKey());
     }
 
-    /**
-     * 在事务内写入切片。
-     */
-    private List<KnowledgeChunk> persistDocumentChunks(Long documentId, List<KnowledgeChunkRow> rows) {
-        KnowledgeDocument document = knowledgeDocumentRepository.findById(documentId)
-                .orElseThrow(() -> new ApiException("KNOWLEDGE_DOCUMENT_NOT_FOUND", "Knowledge document not found", HttpStatus.NOT_FOUND));
-
-        knowledgeChunkJdbcRepository.batchInsert(
-                document.getTenant().getId(),
-                document.getKnowledgeBase().getId(),
-                document.getId(),
-                rows
-        );
-        return knowledgeChunkRepository.findAllByDocument_IdOrderByChunkIndexAsc(documentId);
+    /** Atomically reserves cumulative tenant chunk capacity before any embedding spend. */
+    private void reserveSynchronousChunkQuota(Long documentId, Long tenantId, int chunkCount) {
+        transactionTemplate.executeWithoutResult(status -> {
+            knowledgeDocumentRepository.lockTenantForImport(tenantId);
+            KnowledgeDocument document = knowledgeDocumentRepository.findByIdForUpdate(documentId)
+                    .orElseThrow(() -> new ApiException(
+                            "KNOWLEDGE_DOCUMENT_NOT_FOUND",
+                            "Knowledge document not found",
+                            HttpStatus.NOT_FOUND
+                    ));
+            requireSynchronousProcessing(document);
+            requireTenantChunkCapacity(tenantId, documentId, chunkCount);
+            knowledgeChunkRepository.deleteAllByDocument_Id(documentId);
+            knowledgeChunkRepository.flush();
+            document.setChunkCount(chunkCount);
+            knowledgeDocumentRepository.saveAndFlush(document);
+        });
     }
 
-    private List<KnowledgeChunk> persistAsyncDocumentChunks(
+    /** Uses tenant -> document lock order so concurrent workers cannot oversubscribe chunk quota. */
+    private void reserveAsyncChunkQuota(
             Long documentId,
             int deliveryAttempt,
             AsyncWorkItem workItem,
-            List<KnowledgeChunkRow> rows
+            int chunkCount
+    ) {
+        transactionTemplate.executeWithoutResult(status -> {
+            knowledgeDocumentRepository.lockTenantForImport(workItem.tenantId());
+            KnowledgeDocument document = knowledgeDocumentRepository.findByIdForUpdate(documentId)
+                    .orElseThrow(() -> new KnowledgeIngestWorkSupersededException(documentId, deliveryAttempt));
+            assertAsyncWorkOwnership(document, deliveryAttempt, workItem);
+            requireTenantChunkCapacity(workItem.tenantId(), documentId, chunkCount);
+            knowledgeChunkRepository.deleteAllByDocument_Id(documentId);
+            knowledgeChunkRepository.flush();
+            // chunk_count is both the eventual count and an atomic quota reservation while the
+            // bounded batches are being embedded and inserted.
+            document.setChunkCount(chunkCount);
+            document.setProcessingLeaseUntil(leaseUntil());
+            knowledgeDocumentRepository.saveAndFlush(document);
+        });
+    }
+
+    /**
+     * Holds at most embedding-batch-size vectors and rows at once. Text chunks remain bounded by
+     * maxChunksPerDocument; every batch is fenced again before it can commit side effects.
+     */
+    private void embedAndPersistChunkBatches(
+            Long documentId,
+            Long tenantId,
+            Long knowledgeBaseId,
+            List<String> chunks,
+            PreparedModelConfig embeddingModelConfig,
+            AsyncBatchOwnership ownership
+    ) {
+        int batchSize = knowledgeProperties.getEmbeddingBatchSize();
+        for (int start = 0; start < chunks.size(); start += batchSize) {
+            int end = Math.min(start + batchSize, chunks.size());
+            if (ownership != null) {
+                assertAndRenewAsyncWorkOwnership(documentId, ownership.deliveryAttempt(), ownership.workItem());
+            }
+            List<String> textBatch = List.copyOf(chunks.subList(start, end));
+            List<float[]> vectors = embeddingGatewayService.embedTexts(embeddingModelConfig, textBatch);
+            if (vectors == null || vectors.size() != textBatch.size()) {
+                throw new ApiException(
+                        "EMBEDDING_RESPONSE_SIZE_MISMATCH",
+                        "Embedding response size does not match the submitted batch",
+                        HttpStatus.BAD_GATEWAY
+                );
+            }
+            List<KnowledgeChunkRow> rows = new ArrayList<>(textBatch.size());
+            for (int offset = 0; offset < textBatch.size(); offset++) {
+                rows.add(new KnowledgeChunkRow(start + offset, textBatch.get(offset), vectors.get(offset)));
+            }
+            transactionTemplate.executeWithoutResult(status -> persistChunkBatch(
+                    documentId,
+                    tenantId,
+                    knowledgeBaseId,
+                    rows,
+                    ownership
+            ));
+        }
+    }
+
+    private void persistChunkBatch(
+            Long documentId,
+            Long tenantId,
+            Long knowledgeBaseId,
+            List<KnowledgeChunkRow> rows,
+            AsyncBatchOwnership ownership
     ) {
         KnowledgeDocument document = knowledgeDocumentRepository.findByIdForUpdate(documentId)
                 .orElseThrow(() -> new ApiException(
@@ -586,21 +818,43 @@ public class KnowledgeDocumentApplicationService {
                         "Knowledge document not found",
                         HttpStatus.NOT_FOUND
                 ));
-        assertAsyncWorkOwnership(document, deliveryAttempt, workItem);
+        if (ownership == null) {
+            requireSynchronousProcessing(document);
+        } else {
+            assertAsyncWorkOwnership(document, ownership.deliveryAttempt(), ownership.workItem());
+        }
+        if (!Objects.equals(document.getTenant().getId(), tenantId)
+                || !Objects.equals(document.getKnowledgeBase().getId(), knowledgeBaseId)) {
+            throw new IllegalStateException("Knowledge chunk ownership changed while processing");
+        }
+        knowledgeChunkJdbcRepository.batchInsert(tenantId, knowledgeBaseId, documentId, rows);
+        if (ownership != null) {
+            document.setProcessingLeaseUntil(leaseUntil());
+            knowledgeDocumentRepository.save(document);
+        }
+    }
 
-        knowledgeChunkRepository.deleteAllByDocument_Id(documentId);
-        knowledgeChunkRepository.flush();
-        knowledgeChunkJdbcRepository.batchInsert(
-                document.getTenant().getId(),
-                document.getKnowledgeBase().getId(),
-                document.getId(),
-                rows
-        );
+    private KnowledgeDocument markAsyncDocumentIndexing(
+            Long documentId,
+            int deliveryAttempt,
+            AsyncWorkItem workItem
+    ) {
+        KnowledgeDocument document = knowledgeDocumentRepository.findByIdForUpdate(documentId)
+                .orElseThrow(() -> new KnowledgeIngestWorkSupersededException(documentId, deliveryAttempt));
+        assertAsyncWorkOwnership(document, deliveryAttempt, workItem);
         document.setStatus(KnowledgeDocumentStatus.INDEXING);
-        document.setChunkCount(rows.size());
         document.setProcessingLeaseUntil(leaseUntil());
-        knowledgeDocumentRepository.save(document);
-        return knowledgeChunkRepository.findAllByDocument_IdOrderByChunkIndexAsc(documentId);
+        return knowledgeDocumentRepository.saveAndFlush(document);
+    }
+
+    private void requireSynchronousProcessing(KnowledgeDocument document) {
+        if (document.getStatus() != KnowledgeDocumentStatus.PROCESSING) {
+            throw new ApiException(
+                    "KNOWLEDGE_DOCUMENT_PROCESSING_SUPERSEDED",
+                    "Knowledge document processing was superseded",
+                    HttpStatus.CONFLICT
+            );
+        }
     }
 
     private AsyncWorkItem claimAsyncWork(
@@ -626,9 +880,7 @@ public class KnowledgeDocumentApplicationService {
         KnowledgeDocumentStatus claimedFrom = document.getStatus();
         boolean scheduledIndexRetry = claimedFrom == KnowledgeDocumentStatus.INDEXING
                 && document.getNextRetryAt() != null;
-        boolean resumeIndexOnly = claimedFrom == KnowledgeDocumentStatus.INDEXING
-                || (claimedFrom == KnowledgeDocumentStatus.RETRYING
-                && Objects.requireNonNullElse(document.getChunkCount(), 0) > 0);
+        boolean resumeIndexOnly = claimedFrom == KnowledgeDocumentStatus.INDEXING;
         if (scheduledIndexRetry) {
             if (deliveryAttempt != recordedAttempts + 1) {
                 return AsyncWorkItem.noop();
@@ -677,6 +929,8 @@ public class KnowledgeDocumentApplicationService {
                 document.getKnowledgeBase().getId(),
                 document.getFileName(),
                 document.getContentType(),
+                document.getFileSize(),
+                Objects.requireNonNullElse(document.getChunkCount(), 0),
                 document.getStorageBucket(),
                 document.getStorageObjectKey()
         );
@@ -752,12 +1006,52 @@ public class KnowledgeDocumentApplicationService {
         }
     }
 
+    private int indexAsyncDocumentInPages(Long documentId, int deliveryAttempt, AsyncWorkItem workItem) {
+        return indexDocumentInPages(documentId, () ->
+                assertAndRenewAsyncWorkOwnership(documentId, deliveryAttempt, workItem));
+    }
+
+    private int indexDocumentInPages(Long documentId) {
+        return indexDocumentInPages(documentId, () -> { });
+    }
+
+    private int indexDocumentInPages(Long documentId, Runnable betweenPages) {
+        long afterChunkId = 0L;
+        int indexed = 0;
+        while (true) {
+            List<KnowledgeChunkSearchDocument> page = knowledgeChunkJdbcRepository
+                    .findSearchDocumentsByDocumentIdAfterChunkId(
+                            documentId,
+                            afterChunkId,
+                            knowledgeSearchIndexer.bulkBatchSize()
+                    );
+            if (page.isEmpty()) {
+                if (indexed == 0) {
+                    throw new ApiException(
+                            "KNOWLEDGE_DOCUMENT_CHUNKS_EMPTY",
+                            "Knowledge document does not contain indexable chunks",
+                            HttpStatus.CONFLICT
+                    );
+                }
+                return indexed;
+            }
+            betweenPages.run();
+            knowledgeSearchIndexer.indexSearchDocuments(page);
+            indexed += page.size();
+            afterChunkId = page.getLast().chunkId();
+            if (page.size() < knowledgeSearchIndexer.bulkBatchSize()) {
+                return indexed;
+            }
+        }
+    }
+
     /**
      * 在索引完成后把文档标记为 READY。
      */
     private KnowledgeDocumentResponse markDocumentReady(Long documentId, int chunkCount) {
-        KnowledgeDocument document = knowledgeDocumentRepository.findById(documentId)
+        KnowledgeDocument document = knowledgeDocumentRepository.findByIdForUpdate(documentId)
                 .orElseThrow(() -> new ApiException("KNOWLEDGE_DOCUMENT_NOT_FOUND", "Knowledge document not found", HttpStatus.NOT_FOUND));
+        requireSynchronousProcessing(document);
         document.setStatus(KnowledgeDocumentStatus.READY);
         document.setChunkCount(chunkCount);
         document.setCompletedAt(Instant.now(clock));
@@ -791,14 +1085,28 @@ public class KnowledgeDocumentApplicationService {
         }
         try {
             minioStorageService.removeObject(storedObject.bucket(), storedObject.objectKey());
-        } catch (ApiException cleanupEx) {
+        } catch (RuntimeException cleanupEx) {
             log.warn(
-                    "清理失败的知识库上传对象时出错，documentId={}, bucket={}, objectKey={}, code={}",
+                    "Direct cleanup of uploaded knowledge object failed; scheduling durable orphan cleanup, "
+                            + "documentId={}, bucket={}, objectKey={}, reason={}",
                     documentId,
                     storedObject.bucket(),
                     storedObject.objectKey(),
-                    cleanupEx.getCode()
+                    cleanupEx.toString()
             );
+            try {
+                knowledgeDocumentCleanupService.enqueueOrphan(
+                        storedObject.bucket(),
+                        storedObject.objectKey()
+                );
+            } catch (RuntimeException enqueueEx) {
+                log.error(
+                        "Could not persist orphan knowledge object cleanup, bucket={}, objectKey={}",
+                        storedObject.bucket(),
+                        storedObject.objectKey(),
+                        enqueueEx
+                );
+            }
         }
     }
 
@@ -818,8 +1126,27 @@ public class KnowledgeDocumentApplicationService {
      */
     private KnowledgeDocument requireTenantOwnedDocument(Long knowledgeBaseId, Long documentId) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        return knowledgeDocumentRepository.findByIdAndKnowledgeBase_IdAndTenant_Id(documentId, knowledgeBaseId, currentUser.tenantId())
+        KnowledgeDocument document = knowledgeDocumentRepository
+                .findByIdAndKnowledgeBase_IdAndTenant_Id(documentId, knowledgeBaseId, currentUser.tenantId())
                 .orElseThrow(() -> new ApiException("KNOWLEDGE_DOCUMENT_NOT_FOUND", "Knowledge document not found", HttpStatus.NOT_FOUND));
+        if (document.getStatus() == KnowledgeDocumentStatus.DELETING) {
+            throw new ApiException(
+                    "KNOWLEDGE_DOCUMENT_NOT_FOUND",
+                    "Knowledge document not found",
+                    HttpStatus.NOT_FOUND
+            );
+        }
+        return document;
+    }
+
+    private void requireDuplicateNotDeleting(KnowledgeDocument duplicate) {
+        if (duplicate.getStatus() == KnowledgeDocumentStatus.DELETING) {
+            throw new ApiException(
+                    "KNOWLEDGE_DOCUMENT_DELETE_IN_PROGRESS",
+                    "An identical document is still being deleted; retry the upload shortly",
+                    HttpStatus.CONFLICT
+            );
+        }
     }
 
     /**
@@ -828,6 +1155,73 @@ public class KnowledgeDocumentApplicationService {
     private void validateFile(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new ApiException("DOCUMENT_FILE_EMPTY", "Uploaded file is empty", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    private void validateFileSize(long fileSize) {
+        if (fileSize < 1) {
+            throw new ApiException("DOCUMENT_FILE_EMPTY", "Uploaded file is empty", HttpStatus.BAD_REQUEST);
+        }
+        if (fileSize > knowledgeProperties.getMaxFileSizeBytes()) {
+            throw new ApiException(
+                    "DOCUMENT_FILE_TOO_LARGE",
+                    "Document exceeds the configured size limit",
+                    HttpStatus.PAYLOAD_TOO_LARGE
+            );
+        }
+    }
+
+    private void requireTenantImportCapacity(Long tenantId, long incomingFileSize) {
+        long active = knowledgeDocumentRepository.countActiveImportsByTenant(tenantId);
+        if (active >= knowledgeProperties.getMaxActiveImportsPerTenant()) {
+            throw new ApiException(
+                    "KNOWLEDGE_IMPORT_CAPACITY_EXCEEDED",
+                    "Tenant has too many active document imports",
+                    HttpStatus.TOO_MANY_REQUESTS
+            );
+        }
+        long documentCount = knowledgeDocumentRepository.countQuotaDocumentsByTenant(tenantId);
+        if (documentCount >= knowledgeProperties.getMaxDocumentsPerTenant()) {
+            throw new ApiException(
+                    "KNOWLEDGE_DOCUMENT_QUOTA_EXCEEDED",
+                    "Tenant has reached its knowledge document quota; delete documents before uploading more",
+                    HttpStatus.CONFLICT
+            );
+        }
+        long usedBytes = knowledgeDocumentRepository.sumQuotaSourceBytesByTenant(tenantId);
+        if (incomingFileSize > knowledgeProperties.getMaxSourceBytesPerTenant()
+                || usedBytes > knowledgeProperties.getMaxSourceBytesPerTenant() - incomingFileSize) {
+            throw new ApiException(
+                    "KNOWLEDGE_SOURCE_STORAGE_QUOTA_EXCEEDED",
+                    "Tenant has reached its knowledge source storage quota; FAILED documents count until deleted",
+                    HttpStatus.PAYLOAD_TOO_LARGE
+            );
+        }
+    }
+
+    private void requireTenantChunkCapacity(Long tenantId, Long documentId, int requestedChunks) {
+        long otherReservedChunks = knowledgeDocumentRepository
+                .sumQuotaChunksByTenantExcludingDocument(tenantId, documentId);
+        long maximum = knowledgeProperties.getMaxChunksPerTenant();
+        if (requestedChunks > maximum || otherReservedChunks > maximum - requestedChunks) {
+            throw new ApiException(
+                    "KNOWLEDGE_CHUNK_QUOTA_EXCEEDED",
+                    "Tenant has reached its cumulative knowledge chunk quota; FAILED documents count until deleted",
+                    HttpStatus.PAYLOAD_TOO_LARGE
+            );
+        }
+    }
+
+    private String sha256(byte[] bytes) {
+        MessageDigest digest = sha256Digest();
+        return HexFormat.of().formatHex(digest.digest(bytes));
+    }
+
+    private MessageDigest sha256Digest() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 is not available", ex);
         }
     }
 
@@ -872,13 +1266,6 @@ public class KnowledgeDocumentApplicationService {
             return value;
         }
         return value.substring(0, maxLength);
-    }
-
-    private boolean isActiveProcessingStatus(KnowledgeDocumentStatus status) {
-        return status == KnowledgeDocumentStatus.QUEUED
-                || status == KnowledgeDocumentStatus.PROCESSING
-                || status == KnowledgeDocumentStatus.RETRYING
-                || status == KnowledgeDocumentStatus.INDEXING;
     }
 
     /**
@@ -956,11 +1343,22 @@ public class KnowledgeDocumentApplicationService {
             Long knowledgeBaseId,
             String fileName,
             String contentType,
+            Long fileSize,
+            int chunkCount,
             String storageBucket,
             String storageObjectKey
     ) {
         private static AsyncWorkItem noop() {
-            return new AsyncWorkItem(false, false, null, null, null, null, null, null, null, null);
+            return new AsyncWorkItem(false, false, null, null, null, null, null, null, null, 0, null, null);
         }
+    }
+
+    private record EnqueueResult(KnowledgeDocument document, boolean duplicate) {
+    }
+
+    private record SyncCreateResult(KnowledgeDocument document, boolean duplicate) {
+    }
+
+    private record AsyncBatchOwnership(int deliveryAttempt, AsyncWorkItem workItem) {
     }
 }

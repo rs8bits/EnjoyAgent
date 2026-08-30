@@ -10,8 +10,6 @@ spring:
   autoconfigure:
     exclude:
       - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
-  profiles:
-    active: local
   data:
     web:
       pageable:
@@ -20,18 +18,21 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
       connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
       timeout: ${REDIS_COMMAND_TIMEOUT:750ms}
+      repositories:
+        enabled: false
   # PostgreSQL 数据源配置
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:enjoy_agent}
-    username: ${DB_USERNAME:enjoy}
-    password: ${DB_PASSWORD:enjoy123}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
-    username: ${RABBITMQ_USERNAME:guest}
-    password: ${RABBITMQ_PASSWORD:guest}
+    username: ${RABBITMQ_USERNAME}
+    password: ${RABBITMQ_PASSWORD}
     publisher-confirm-type: correlated
     publisher-returns: true
     template:
@@ -85,44 +86,120 @@ enjoy:
     session-summary-ttl: ${APP_CACHE_SESSION_SUMMARY_TTL:30m}
     distributed-lock-wait: ${APP_CACHE_DISTRIBUTED_LOCK_WAIT:500ms}
   security:
-    jwt-secret: ${APP_JWT_SECRET:change-me-to-a-long-random-string}
-    access-token-expiration-seconds: 7200
+    jwt-secret: ${APP_JWT_SECRET}
+    allow-insecure-development-secret: false
+    issuer: ${APP_JWT_ISSUER:enjoy-agent}
+    audience: ${APP_JWT_AUDIENCE:enjoy-agent-web}
+    key-id: ${APP_JWT_KEY_ID:primary}
+    previous-jwt-keys: ${APP_PREVIOUS_JWT_KEYS:}
+    access-token-cookie-name: ${APP_ACCESS_TOKEN_COOKIE_NAME:enjoy_agent_access}
+    access-token-cookie-secure: ${APP_ACCESS_TOKEN_COOKIE_SECURE:true}
+    access-token-cookie-same-site: ${APP_ACCESS_TOKEN_COOKIE_SAME_SITE:Strict}
+    expose-access-token-in-body: ${APP_EXPOSE_ACCESS_TOKEN_IN_BODY:false}
+    allow-public-developer-endpoints: false
+    allowed-browser-origins: ${APP_ALLOWED_BROWSER_ORIGINS:}
+    access-token-expiration-seconds: ${APP_ACCESS_TOKEN_EXPIRATION_SECONDS:7200}
   credential:
-    aes-key: ${APP_CREDENTIAL_AES_KEY:0123456789abcdef0123456789abcdef}
+    aes-key: ${APP_CREDENTIAL_AES_KEY}
+    previous-aes-keys: ${APP_CREDENTIAL_PREVIOUS_AES_KEYS:}
+    allow-insecure-development-secret: false
   model-gateway:
     openai-base-url: ${APP_MODEL_GATEWAY_OPENAI_BASE_URL:https://api.openai.com}
     platform-openai-api-key: ${APP_PLATFORM_OPENAI_API_KEY:}
+    connect-timeout-seconds: ${APP_MODEL_GATEWAY_CONNECT_TIMEOUT_SECONDS:10}
+    read-timeout-seconds: ${APP_MODEL_GATEWAY_READ_TIMEOUT_SECONDS:300}
+    max-response-bytes: ${APP_MODEL_GATEWAY_MAX_RESPONSE_BYTES:2000000}
+    max-response-chars: ${APP_MODEL_GATEWAY_MAX_RESPONSE_CHARS:500000}
+    max-prompt-chars: ${APP_MODEL_GATEWAY_MAX_PROMPT_CHARS:400000}
+    max-prompt-bytes: ${APP_MODEL_GATEWAY_MAX_PROMPT_BYTES:1000000}
   billing:
     enabled: ${APP_BILLING_ENABLED:false}
     currency: ${APP_BILLING_CURRENCY:CNY}
+    reservation-tokens: ${APP_BILLING_RESERVATION_OUTPUT_TOKENS:4096}
+    reservation-max-input-tokens: ${APP_BILLING_RESERVATION_MAX_INPUT_TOKENS:1000000}
+    reservation-max-output-tokens: ${APP_BILLING_RESERVATION_MAX_OUTPUT_TOKENS:131072}
+    reservation-ttl: ${APP_BILLING_RESERVATION_TTL:10m}
+    reservation-release-claim-timeout: ${APP_BILLING_RESERVATION_RELEASE_CLAIM_TIMEOUT:1m}
+    minimum-reservation-amount: ${APP_BILLING_MINIMUM_RESERVATION_AMOUNT:0.000001}
+    processing-max-attempts: ${APP_BILLING_PROCESSING_MAX_ATTEMPTS:5}
+    processing-retry-delay: ${APP_BILLING_PROCESSING_RETRY_DELAY:10s}
+    reservation-reaper-delay-ms: ${APP_BILLING_RESERVATION_REAPER_DELAY_MS:30000}
+    reservation-reaper-initial-delay-ms: ${APP_BILLING_RESERVATION_REAPER_INITIAL_DELAY_MS:30000}
+    outbox-relay-delay-ms: ${APP_BILLING_OUTBOX_RELAY_DELAY_MS:500}
+    outbox-relay-initial-delay-ms: ${APP_BILLING_OUTBOX_RELAY_INITIAL_DELAY_MS:500}
     rabbit:
       exchange: ${APP_BILLING_RABBIT_EXCHANGE:enjoy.agent.events}
       usage-routing-key: ${APP_BILLING_RABBIT_USAGE_ROUTING_KEY:billing.usage}
       usage-queue: ${APP_BILLING_RABBIT_USAGE_QUEUE:billing.usage.queue}
       usage-dead-letter-routing-key: ${APP_BILLING_RABBIT_USAGE_DLQ_ROUTING_KEY:billing.usage.dlq}
       usage-dead-letter-queue: ${APP_BILLING_RABBIT_USAGE_DLQ:billing.usage.dlq}
+      publisher-confirm-timeout: ${APP_BILLING_RABBIT_PUBLISHER_CONFIRM_TIMEOUT:5s}
+      outbox-claim-timeout: ${APP_BILLING_RABBIT_OUTBOX_CLAIM_TIMEOUT:30s}
+      outbox-publish-retry-delay: ${APP_BILLING_RABBIT_OUTBOX_PUBLISH_RETRY_DELAY:2s}
+      reconciliation-delay: ${APP_BILLING_RABBIT_RECONCILIATION_DELAY:1m}
+      outbox-batch-size: ${APP_BILLING_RABBIT_OUTBOX_BATCH_SIZE:50}
   mcp:
+    approval:
+      signing-secret: ${APP_MCP_APPROVAL_SIGNING_SECRET}
+      previous-signing-secrets: ${APP_MCP_APPROVAL_PREVIOUS_SIGNING_SECRETS:}
+      allow-insecure-development-secret: false
     oauth:
-      public-base-url: ${APP_MCP_OAUTH_PUBLIC_BASE_URL:http://localhost:${server.port}}
+      public-base-url: ${APP_MCP_OAUTH_PUBLIC_BASE_URL}
       callback-path: ${APP_MCP_OAUTH_CALLBACK_PATH:/api/mcp/oauth/callback}
       refresh-skew-seconds: ${APP_MCP_OAUTH_REFRESH_SKEW_SECONDS:60}
       authorization-ttl-seconds: ${APP_MCP_OAUTH_AUTHORIZATION_TTL_SECONDS:600}
+      max-token-response-bytes: ${APP_MCP_OAUTH_MAX_TOKEN_RESPONSE_BYTES:262144}
+      max-metadata-response-bytes: ${APP_MCP_OAUTH_MAX_METADATA_RESPONSE_BYTES:1000000}
     runtime:
       max-tool-rounds: ${APP_MCP_MAX_TOOL_ROUNDS:3}
       max-tool-result-chars: ${APP_MCP_MAX_TOOL_RESULT_CHARS:4000}
       http-connect-timeout-seconds: ${APP_MCP_HTTP_CONNECT_TIMEOUT_SECONDS:10}
       http-read-timeout-seconds: ${APP_MCP_HTTP_READ_TIMEOUT_SECONDS:60}
+      max-tool-response-chars: ${APP_MCP_MAX_TOOL_RESPONSE_CHARS:100000}
+      max-http-response-bytes: ${APP_MCP_MAX_HTTP_RESPONSE_BYTES:1048576}
+      max-tool-calls-per-turn: ${APP_MCP_MAX_TOOL_CALLS_PER_TURN:20}
+      max-cumulative-tool-result-chars: ${APP_MCP_MAX_CUMULATIVE_TOOL_RESULT_CHARS:20000}
+      max-cumulative-model-tokens-per-turn: ${APP_MCP_MAX_CUMULATIVE_MODEL_TOKENS_PER_TURN:100000}
+      default-max-output-tokens-per-model-call: ${APP_MCP_DEFAULT_MAX_OUTPUT_TOKENS_PER_MODEL_CALL:4096}
+  workflow:
+    runtime:
+      max-model-calls: ${APP_WORKFLOW_MAX_MODEL_CALLS:20}
+      max-total-model-tokens: ${APP_WORKFLOW_MAX_TOTAL_MODEL_TOKENS:100000}
+      max-duration-seconds: ${APP_WORKFLOW_MAX_DURATION_SECONDS:300}
+      max-tool-calls: ${APP_WORKFLOW_MAX_TOOL_CALLS:20}
+      max-cumulative-tool-result-chars: ${APP_WORKFLOW_MAX_CUMULATIVE_TOOL_RESULT_CHARS:100000}
+      max-prompt-token-upper-bound-per-call: ${APP_WORKFLOW_MAX_PROMPT_TOKEN_UPPER_BOUND_PER_CALL:250000}
+      default-max-output-tokens: ${APP_WORKFLOW_DEFAULT_MAX_OUTPUT_TOKENS:4096}
   knowledge:
     chunk-size: ${APP_KNOWLEDGE_CHUNK_SIZE:800}
     chunk-overlap: ${APP_KNOWLEDGE_CHUNK_OVERLAP:100}
     embedding-dimensions: ${APP_KNOWLEDGE_EMBEDDING_DIMENSIONS:1024}
     embedding-batch-size: ${APP_KNOWLEDGE_EMBEDDING_BATCH_SIZE:20}
+    embedding-connect-timeout: ${APP_KNOWLEDGE_EMBEDDING_CONNECT_TIMEOUT:3s}
+    embedding-read-timeout: ${APP_KNOWLEDGE_EMBEDDING_READ_TIMEOUT:20s}
+    embedding-request-timeout: ${APP_KNOWLEDGE_EMBEDDING_REQUEST_TIMEOUT:30s}
+    embedding-max-response-bytes: ${APP_KNOWLEDGE_EMBEDDING_MAX_RESPONSE_BYTES:8388608}
+    max-file-size-bytes: ${APP_KNOWLEDGE_MAX_FILE_SIZE_BYTES:20971520}
+    max-pdf-pages: ${APP_KNOWLEDGE_MAX_PDF_PAGES:500}
+    max-extracted-text-chars: ${APP_KNOWLEDGE_MAX_EXTRACTED_TEXT_CHARS:2000000}
+    max-chunks-per-document: ${APP_KNOWLEDGE_MAX_CHUNKS_PER_DOCUMENT:10000}
+    max-active-imports-per-tenant: ${APP_KNOWLEDGE_MAX_ACTIVE_IMPORTS_PER_TENANT:8}
+    max-documents-per-tenant: ${APP_KNOWLEDGE_MAX_DOCUMENTS_PER_TENANT:1000}
+    max-source-bytes-per-tenant: ${APP_KNOWLEDGE_MAX_SOURCE_BYTES_PER_TENANT:2147483648}
+    max-chunks-per-tenant: ${APP_KNOWLEDGE_MAX_CHUNKS_PER_TENANT:200000}
+    extraction-timeout: ${APP_KNOWLEDGE_EXTRACTION_TIMEOUT:2m}
+    max-concurrent-extractions: ${APP_KNOWLEDGE_MAX_CONCURRENT_EXTRACTIONS:4}
+    extraction-admission-timeout: ${APP_KNOWLEDGE_EXTRACTION_ADMISSION_TIMEOUT:1s}
     recall-top-k: ${APP_KNOWLEDGE_RECALL_TOP_K:12}
     retrieval-top-k: ${APP_KNOWLEDGE_RETRIEVAL_TOP_K:4}
     query-rewrite-enabled: ${APP_KNOWLEDGE_QUERY_REWRITE_ENABLED:true}
     query-rewrite-max-context-messages: ${APP_KNOWLEDGE_QUERY_REWRITE_MAX_CONTEXT_MESSAGES:6}
     retrieval-debug-enabled: ${APP_KNOWLEDGE_RETRIEVAL_DEBUG_ENABLED:true}
     rerank-base-url: ${APP_KNOWLEDGE_RERANK_BASE_URL:https://dashscope.aliyuncs.com}
+    rerank-connect-timeout: ${APP_KNOWLEDGE_RERANK_CONNECT_TIMEOUT:3s}
+    rerank-read-timeout: ${APP_KNOWLEDGE_RERANK_READ_TIMEOUT:10s}
+    rerank-request-timeout: ${APP_KNOWLEDGE_RERANK_REQUEST_TIMEOUT:15s}
+    rerank-max-response-bytes: ${APP_KNOWLEDGE_RERANK_MAX_RESPONSE_BYTES:1048576}
     ingest:
       async-enabled: ${APP_KNOWLEDGE_ASYNC_INGEST_ENABLED:true}
       exchange: ${APP_KNOWLEDGE_INGEST_EXCHANGE:enjoy.knowledge.events}
@@ -139,6 +216,15 @@ enjoy:
       publisher-confirm-timeout: ${APP_KNOWLEDGE_INGEST_PUBLISHER_CONFIRM_TIMEOUT:5s}
       outbox-publish-retry-delay: ${APP_KNOWLEDGE_INGEST_OUTBOX_PUBLISH_RETRY_DELAY:2s}
       processing-lease-duration: ${APP_KNOWLEDGE_INGEST_PROCESSING_LEASE_DURATION:10m}
+      lease-reaper-batch-size: ${APP_KNOWLEDGE_INGEST_LEASE_REAPER_BATCH_SIZE:50}
+      lease-reaper-delay-ms: ${APP_KNOWLEDGE_INGEST_LEASE_REAPER_DELAY_MS:30000}
+      lease-reaper-initial-delay-ms: ${APP_KNOWLEDGE_INGEST_LEASE_REAPER_INITIAL_DELAY_MS:30000}
+      cleanup-batch-size: ${APP_KNOWLEDGE_INGEST_CLEANUP_BATCH_SIZE:20}
+      cleanup-grace-period: ${APP_KNOWLEDGE_INGEST_CLEANUP_GRACE_PERIOD:30s}
+      cleanup-claim-timeout: ${APP_KNOWLEDGE_INGEST_CLEANUP_CLAIM_TIMEOUT:2m}
+      cleanup-retry-delay: ${APP_KNOWLEDGE_INGEST_CLEANUP_RETRY_DELAY:10s}
+      cleanup-relay-delay-ms: ${APP_KNOWLEDGE_INGEST_CLEANUP_RELAY_DELAY_MS:1000}
+      cleanup-relay-initial-delay-ms: ${APP_KNOWLEDGE_INGEST_CLEANUP_RELAY_INITIAL_DELAY_MS:1000}
       outbox-relay-delay-ms: ${APP_KNOWLEDGE_INGEST_OUTBOX_RELAY_DELAY_MS:500}
       outbox-relay-initial-delay-ms: ${APP_KNOWLEDGE_INGEST_OUTBOX_RELAY_INITIAL_DELAY_MS:500}
     search:
@@ -154,28 +240,33 @@ enjoy:
       read-timeout-seconds: ${APP_KNOWLEDGE_SEARCH_READ_TIMEOUT_SECONDS:20}
       index-analyzer: ${APP_KNOWLEDGE_SEARCH_INDEX_ANALYZER:standard}
       search-analyzer: ${APP_KNOWLEDGE_SEARCH_SEARCH_ANALYZER:standard}
+      bulk-batch-size: ${APP_KNOWLEDGE_SEARCH_BULK_BATCH_SIZE:250}
   minio:
     endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
-    access-key: ${MINIO_ACCESS_KEY:minioadmin}
-    secret-key: ${MINIO_SECRET_KEY:minioadmin}
+    access-key: ${MINIO_ACCESS_KEY}
+    secret-key: ${MINIO_SECRET_KEY}
     bucket: ${MINIO_BUCKET:enjoy-agent}
 
 # OpenAPI / Swagger UI 调试配置
 springdoc:
   api-docs:
+    enabled: ${APP_OPENAPI_ENABLED:false}
     path: /v3/api-docs
   swagger-ui:
+    enabled: ${APP_OPENAPI_ENABLED:false}
     path: /swagger-ui.html
     try-it-out-enabled: true
-    persist-authorization: true
+    # Never persist bearer credentials in browser storage, even when the local
+    # developer UI is explicitly enabled.
+    persist-authorization: false
     display-request-duration: true
 
-# Actuator 与 Prometheus。只在 SecurityConfig 中匿名放行 health 和 prometheus。
+# Actuator 默认只暴露探针；生产环境显式启用其他端点并配合管理网鉴权。
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,prometheus
+        include: ${APP_MANAGEMENT_EXPOSED_ENDPOINTS:health,info}
   endpoint:
     health:
       probes:

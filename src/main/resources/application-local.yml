@@ -1,14 +1,68 @@
 # 本地环境打开更多日志，便于学习和调试
 spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:enjoy_agent}
+    username: ${DB_USERNAME:enjoy}
+    password: ${DB_PASSWORD:enjoy123}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
   jpa:
     show-sql: true
 
 enjoy:
+  security:
+    jwt-secret: ${APP_JWT_SECRET:change-me-to-a-long-random-string}
+    allow-insecure-development-secret: true
+    access-token-cookie-secure: false
+    expose-access-token-in-body: true
+    allow-public-developer-endpoints: true
+    allowed-browser-origins:
+      - http://127.0.0.1:5173
+      - http://localhost:5173
+    outbound:
+      allow-plain-http: true
+      allowed-hosts:
+        - 127.0.0.1
+        - localhost
+  credential:
+    aes-key: ${APP_CREDENTIAL_AES_KEY:0123456789abcdef0123456789abcdef}
+    allow-insecure-development-secret: true
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ACCESS_KEY:minioadmin}
+    secret-key: ${MINIO_SECRET_KEY:minioadmin}
+    bucket: ${MINIO_BUCKET:enjoy-agent}
   billing:
     enabled: true
+  mcp:
+    approval:
+      signing-secret: ${APP_MCP_APPROVAL_SIGNING_SECRET:development-only-mcp-approval-signing-secret}
+      allow-insecure-development-secret: true
+    oauth:
+      public-base-url: ${APP_MCP_OAUTH_PUBLIC_BASE_URL:http://localhost:${server.port}}
   model-gateway:
     # 本地开发环境默认走百炼兼容接口，避免每次手动传 base url。
     openai-base-url: https://dashscope.aliyuncs.com/compatible-mode
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
 
 logging:
   level:

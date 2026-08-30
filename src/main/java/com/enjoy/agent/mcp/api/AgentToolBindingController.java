@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 /**
  * Agent 与 MCP Tool 绑定管理接口。
@@ -41,6 +42,7 @@ public class AgentToolBindingController {
 
     @Operation(summary = "替换 Agent 工具绑定", description = "用一组 MCP Tool ID 替换某个 Agent 当前绑定的全部工具")
     @PutMapping
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<List<AgentToolBindingResponse>> replaceBindings(
             @PathVariable Long agentId,
             @Valid @RequestBody ReplaceAgentToolBindingsRequest request

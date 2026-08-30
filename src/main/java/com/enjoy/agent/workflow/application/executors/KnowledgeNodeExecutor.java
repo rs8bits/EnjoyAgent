@@ -9,6 +9,7 @@ import com.enjoy.agent.knowledge.domain.entity.KnowledgeBase;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.workflow.application.NodeExecutionContext;
 import com.enjoy.agent.workflow.application.NodeExecutionResult;
+import com.enjoy.agent.workflow.application.WorkflowVariableResolver;
 import com.enjoy.agent.workflow.application.WorkflowNodeExecutor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,6 +25,7 @@ import org.springframework.stereotype.Component;
 public class KnowledgeNodeExecutor implements WorkflowNodeExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeNodeExecutor.class);
+    private static final int MAX_RESOLVED_QUERY_LENGTH = 20_000;
 
     private final KnowledgeBaseApplicationService knowledgeBaseApplicationService;
     private final KnowledgeRetrievalService knowledgeRetrievalService;
@@ -52,7 +54,7 @@ public class KnowledgeNodeExecutor implements WorkflowNodeExecutor {
         KnowledgeBase kb = knowledgeBaseApplicationService.requireRunnableKnowledgeBase(ctx.tenantId(), config.knowledgeBaseId);
         PreparedKnowledgeBase preparedKb = knowledgeBaseApplicationService.snapshotKnowledgeBase(kb);
 
-        String question = (String) ctx.context().getOrDefault("user_input", "");
+        String question = resolveQuestion(ctx, config);
         List<ChatPromptMessage> history = new ArrayList<>();
         Object historyObj = ctx.context().get("history_messages");
         if (historyObj instanceof List<?> list) {
@@ -84,6 +86,45 @@ public class KnowledgeNodeExecutor implements WorkflowNodeExecutor {
         }
     }
 
-    private record KnowledgeNodeConfig(Long knowledgeBaseId) {
+    private String resolveQuestion(NodeExecutionContext ctx, KnowledgeNodeConfig config) {
+        if (config.queryTemplate() != null && !config.queryTemplate().isBlank()) {
+            return WorkflowVariableResolver.resolveTextTemplate(
+                    config.queryTemplate(), ctx.context(), objectMapper, MAX_RESOLVED_QUERY_LENGTH,
+                    this::queryTooLong);
+        }
+        if (config.querySelector() != null && !config.querySelector().isBlank()) {
+            String selector = config.querySelector().trim();
+            Object value;
+            if (selector.startsWith("{{") && selector.endsWith("}}")) {
+                value = WorkflowVariableResolver.resolveTypedTemplate(
+                        selector, ctx.context(), objectMapper, MAX_RESOLVED_QUERY_LENGTH,
+                        this::queryTooLong);
+            } else {
+                WorkflowVariableResolver.Resolution resolved =
+                        WorkflowVariableResolver.resolveSelector(selector, ctx.context());
+                value = resolved.found() ? resolved.value() : "{{" + selector + "}}";
+            }
+            String rendered = WorkflowVariableResolver.renderTextValue(value, objectMapper);
+            if (rendered.length() > MAX_RESOLVED_QUERY_LENGTH) {
+                throw queryTooLong();
+            }
+            return rendered;
+        }
+        String rendered = WorkflowVariableResolver.renderTextValue(ctx.context().get("user_input"), objectMapper);
+        if (rendered.length() > MAX_RESOLVED_QUERY_LENGTH) {
+            throw queryTooLong();
+        }
+        return rendered;
+    }
+
+    private ApiException queryTooLong() {
+        return new ApiException(
+                "WORKFLOW_KNOWLEDGE_QUERY_TOO_LONG",
+                "Resolved workflow knowledge query must be at most "
+                        + MAX_RESOLVED_QUERY_LENGTH + " characters",
+                HttpStatus.BAD_REQUEST);
+    }
+
+    private record KnowledgeNodeConfig(Long knowledgeBaseId, String queryTemplate, String querySelector) {
     }
 }

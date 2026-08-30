@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MODE="${1:-all}"
-MAVEN_BIN="${MAVEN_BIN:-mvn}"
+MAVEN_BIN="${MAVEN_BIN:-./mvnw}"
 SKIP_BUILD="${STAGE4_SKIP_BUILD:-false}"
 KEEP_INFRA="${STAGE4_KEEP_INFRA:-false}"
 ORIGINAL_RUNNING_SERVICES=""

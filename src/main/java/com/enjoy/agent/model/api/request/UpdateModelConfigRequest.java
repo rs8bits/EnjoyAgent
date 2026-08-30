@@ -6,6 +6,8 @@ import com.enjoy.agent.model.domain.enums.ModelType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
@@ -45,10 +47,12 @@ public record UpdateModelConfigRequest(
         @Schema(description = "采样温度，仅对对话模型有意义", example = "0.2")
         @DecimalMin(value = "0.0")
         @DecimalMax(value = "2.0")
+        @Digits(integer = 1, fraction = 3)
         BigDecimal temperature,
 
         @Schema(description = "最大输出 token 数", example = "2048")
         @Positive
+        @Max(131072)
         Integer maxTokens,
 
         @Schema(description = "是否启用", example = "true")

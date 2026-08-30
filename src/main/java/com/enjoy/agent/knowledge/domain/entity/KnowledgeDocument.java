@@ -50,6 +50,9 @@ public class KnowledgeDocument extends BaseEntity {
     @Column(name = "storage_object_key", nullable = false, length = 512)
     private String storageObjectKey;
 
+    @Column(name = "content_sha256", length = 64)
+    private String contentSha256;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 32)
     private KnowledgeDocumentStatus status;
@@ -142,6 +145,14 @@ public class KnowledgeDocument extends BaseEntity {
 
     public String getStorageObjectKey() {
         return storageObjectKey;
+    }
+
+    public String getContentSha256() {
+        return contentSha256;
+    }
+
+    public void setContentSha256(String contentSha256) {
+        this.contentSha256 = contentSha256;
     }
 
     public void setStorageObjectKey(String storageObjectKey) {

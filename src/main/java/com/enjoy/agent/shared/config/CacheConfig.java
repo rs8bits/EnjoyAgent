@@ -1,14 +1,17 @@
 package com.enjoy.agent.shared.config;
 
+import com.enjoy.agent.agent.api.response.AgentResponse;
 import com.enjoy.agent.shared.cache.CacheInvalidationBus;
 import com.enjoy.agent.shared.cache.CacheGenerationStore;
 import com.enjoy.agent.shared.cache.CacheLoadGuard;
+import com.enjoy.agent.shared.cache.InvalidatingLocalCache;
 import com.enjoy.agent.shared.cache.RedissonCacheGenerationStore;
 import com.enjoy.agent.shared.cache.RedissonCacheInvalidationBus;
 import com.enjoy.agent.shared.cache.RedissonCacheLoadGuard;
 import com.enjoy.agent.shared.cache.TwoLevelCache;
 import com.enjoy.agent.shared.cache.TwoLevelCacheManager;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
@@ -21,6 +24,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.data.redis.RedisProperties;
 import org.springframework.cache.CacheManager;
+import org.springframework.cache.Cache;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.cache.support.NoOpCacheManager;
 import org.springframework.context.annotation.Bean;
@@ -48,9 +52,24 @@ public class CacheConfig {
     @Bean
     public RedisSerializer<Object> cacheValueSerializer(ObjectMapper objectMapper) {
         ObjectMapper cacheObjectMapper = objectMapper.copy();
+        // Redis only stores immutable AgentResponse values and plain session-summary
+        // strings. Do not trust type ids for the entire application package: a party
+        // with Redis write access must not be able to ask Jackson to construct an
+        // arbitrary domain or infrastructure class.
+        var typeValidator = BasicPolymorphicTypeValidator.builder()
+                .allowIfSubType(AgentResponse.class)
+                .allowIfSubType(Long.class)
+                .allowIfSubType(Integer.class)
+                .allowIfSubType(String.class)
+                .allowIfSubType(Boolean.class)
+                .allowIfSubType(java.time.Instant.class)
+                .build();
+        cacheObjectMapper.activateDefaultTyping(
+                typeValidator,
+                ObjectMapper.DefaultTyping.EVERYTHING
+        );
         return GenericJackson2JsonRedisSerializer.builder()
                 .objectMapper(cacheObjectMapper)
-                .defaultTyping(true)
                 .build();
     }
 
@@ -159,27 +178,18 @@ public class CacheConfig {
 
     @Bean(destroyMethod = "close")
     @ConditionalOnExpression(CACHE_INFRASTRUCTURE_ENABLED)
-    public TwoLevelCache authContextTwoLevelCache(
-            @Qualifier("redisCacheManager") RedisCacheManager redisCacheManager,
+    public InvalidatingLocalCache authContextLocalCache(
             CacheProperties cacheProperties,
-            CacheGenerationStore cacheGenerationStore,
-            CacheInvalidationBus cacheInvalidationBus,
-            MeterRegistry meterRegistry
+            CacheInvalidationBus cacheInvalidationBus
     ) {
-        return new TwoLevelCache(
+        return new InvalidatingLocalCache(
                 CacheNames.AUTH_CONTEXT,
-                redisCacheManager.getCache(CacheNames.AUTH_CONTEXT),
                 Caffeine.newBuilder()
                         .maximumSize(cacheProperties.getAuthContextLocalMaximumSize())
                         .expireAfterWrite(cacheProperties.getAuthContextLocalTtl())
                         .recordStats()
                         .build(),
-                cacheProperties.isAuthContextLocalEnabled(),
-                false,
-                null,
-                cacheGenerationStore,
-                cacheInvalidationBus,
-                meterRegistry
+                cacheInvalidationBus
         );
     }
 
@@ -210,7 +220,7 @@ public class CacheConfig {
     public CacheManager cacheManager(
             @Qualifier("redisCacheManager") RedisCacheManager redisCacheManager,
             @Qualifier("agentConfigTwoLevelCache") TwoLevelCache agentConfigCache,
-            @Qualifier("authContextTwoLevelCache") TwoLevelCache authContextCache,
+            @Qualifier("authContextLocalCache") Cache authContextCache,
             @Qualifier("sessionSummaryTwoLevelCache") TwoLevelCache sessionSummaryCache
     ) {
         return new TwoLevelCacheManager(

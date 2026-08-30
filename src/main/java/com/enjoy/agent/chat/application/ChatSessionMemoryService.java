@@ -9,7 +9,11 @@ import com.enjoy.agent.chat.infrastructure.persistence.ChatMessageRepository;
 import com.enjoy.agent.chat.infrastructure.persistence.ChatSessionMemoryRepository;
 import com.enjoy.agent.chat.infrastructure.persistence.ChatSessionRepository;
 import com.enjoy.agent.modelgateway.application.ModelGatewayInvocationException;
+import com.enjoy.agent.modelgateway.application.ModelGatewayChatCompletion;
+import com.enjoy.agent.modelgateway.application.ModelGatewayConversationMessage;
+import com.enjoy.agent.modelgateway.application.ModelCallAccountingService;
 import com.enjoy.agent.modelgateway.application.ModelGatewayService;
+import com.enjoy.agent.billing.application.BillingUsageApplicationService;
 import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
 import com.enjoy.agent.shared.config.CacheNames;
 import com.enjoy.agent.shared.config.CacheKeys;
@@ -48,6 +52,8 @@ public class ChatSessionMemoryService {
     private final ModelGatewayService modelGatewayService;
     private final TransactionTemplate transactionTemplate;
     private final CacheManager cacheManager;
+    private final BillingUsageApplicationService billingUsageApplicationService;
+    private final ModelCallAccountingService modelCallAccountingService;
 
     public ChatSessionMemoryService(
             ChatSessionMemoryRepository chatSessionMemoryRepository,
@@ -55,7 +61,9 @@ public class ChatSessionMemoryService {
             ChatMessageRepository chatMessageRepository,
             ModelGatewayService modelGatewayService,
             TransactionTemplate transactionTemplate,
-            CacheManager cacheManager
+            CacheManager cacheManager,
+            BillingUsageApplicationService billingUsageApplicationService,
+            ModelCallAccountingService modelCallAccountingService
     ) {
         this.chatSessionMemoryRepository = chatSessionMemoryRepository;
         this.chatSessionRepository = chatSessionRepository;
@@ -63,6 +71,8 @@ public class ChatSessionMemoryService {
         this.modelGatewayService = modelGatewayService;
         this.transactionTemplate = transactionTemplate;
         this.cacheManager = cacheManager;
+        this.billingUsageApplicationService = billingUsageApplicationService;
+        this.modelCallAccountingService = modelCallAccountingService;
     }
 
     /**
@@ -86,12 +96,11 @@ public class ChatSessionMemoryService {
     /**
      * 在一轮聊天成功后，按阈值增量刷新会话摘要。
      */
-    public void refreshSummaryIfNeeded(
-            Long tenantId,
-            Long sessionId,
-            PreparedSessionMemory preparedSessionMemory,
-            PreparedModelConfig chatModelConfig
-    ) {
+    public void refreshSummaryIfNeeded(PreparedChatTurn turn) {
+        Long tenantId = turn.tenantId();
+        Long sessionId = turn.sessionId();
+        PreparedSessionMemory preparedSessionMemory = turn.sessionMemory();
+        PreparedModelConfig chatModelConfig = turn.modelConfig();
         if (preparedSessionMemory == null
                 || !preparedSessionMemory.enabled()
                 || preparedSessionMemory.strategy() != MemoryStrategy.SESSION_SUMMARY
@@ -105,11 +114,25 @@ public class ChatSessionMemoryService {
         }
 
         try {
-            String summary = modelGatewayService.generateText(
-                    chatModelConfig,
-                    SUMMARY_SYSTEM_PROMPT,
-                    buildSummaryPrompt(refreshContext.existingSummary(), refreshContext.pendingMessages())
-            );
+            List<ModelGatewayConversationMessage> messages = List.of(ModelGatewayConversationMessage.user(
+                    buildSummaryPrompt(refreshContext.existingSummary(), refreshContext.pendingMessages())));
+            int inputTokenUpperBound = modelGatewayService.estimateInputTokenUpperBound(
+                    SUMMARY_SYSTEM_PROMPT, null, null, messages, List.of());
+            Long reservationId = billingUsageApplicationService.beginOfficialModelCall(
+                    turn.userId(), chatModelConfig, inputTokenUpperBound);
+            boolean accounted = false;
+            ModelGatewayChatCompletion completion;
+            try {
+                completion = modelGatewayService.generateChatCompletion(
+                        chatModelConfig, SUMMARY_SYSTEM_PROMPT, null, null, messages, List.of());
+                modelCallAccountingService.recordSuccess(turn, completion, reservationId);
+                accounted = true;
+            } finally {
+                if (!accounted) {
+                    billingUsageApplicationService.releaseOfficialModelCall(turn.userId(), reservationId);
+                }
+            }
+            String summary = completion.content();
             String normalizedSummary = normalize(summary);
             if (!StringUtils.hasText(normalizedSummary)) {
                 return;
@@ -124,7 +147,8 @@ public class ChatSessionMemoryService {
                     ex.getCode()
             );
         } catch (RuntimeException ex) {
-            log.warn("Session memory refresh failed, keep previous summary, sessionId={}", sessionId, ex);
+            log.warn("Session memory refresh failed, keep previous summary, sessionId={}, errorType={}",
+                    sessionId, ex.getClass().getSimpleName());
         }
     }
 

@@ -1,6 +1,8 @@
 package com.enjoy.agent.workflow.application.executors;
 
 import com.enjoy.agent.chat.application.ChatPromptMessage;
+import com.enjoy.agent.chat.application.PreparedChatTurn;
+import com.enjoy.agent.billing.application.BillingUsageApplicationService;
 import com.enjoy.agent.credential.domain.entity.Credential;
 import com.enjoy.agent.credential.domain.enums.CredentialStatus;
 import com.enjoy.agent.model.domain.entity.ModelConfig;
@@ -8,6 +10,7 @@ import com.enjoy.agent.model.domain.enums.ModelCredentialSource;
 import com.enjoy.agent.model.domain.enums.ModelType;
 import com.enjoy.agent.model.infrastructure.persistence.ModelConfigRepository;
 import com.enjoy.agent.modelgateway.application.ModelGatewayChatCompletion;
+import com.enjoy.agent.modelgateway.application.ModelCallAccountingService;
 import com.enjoy.agent.modelgateway.application.ModelGatewayConversationMessage;
 import com.enjoy.agent.modelgateway.application.ModelGatewayService;
 import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
@@ -16,7 +19,8 @@ import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.workflow.application.NodeExecutionContext;
 import com.enjoy.agent.workflow.application.NodeExecutionResult;
 import com.enjoy.agent.workflow.application.WorkflowNodeExecutor;
-import com.fasterxml.jackson.databind.JsonNode;
+import com.enjoy.agent.workflow.application.WorkflowExecutionBudget;
+import com.enjoy.agent.workflow.application.WorkflowVariableResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -28,18 +32,26 @@ import org.springframework.stereotype.Component;
 @Component
 public class LlmNodeExecutor implements WorkflowNodeExecutor {
 
+    private static final int MAX_RESOLVED_SYSTEM_PROMPT_LENGTH = 20_000;
+
     private final ModelGatewayService modelGatewayService;
+    private final ModelCallAccountingService modelCallAccountingService;
     private final ModelConfigRepository modelConfigRepository;
     private final ObjectMapper objectMapper;
+    private final BillingUsageApplicationService billingUsageApplicationService;
 
     public LlmNodeExecutor(
             ModelGatewayService modelGatewayService,
+            ModelCallAccountingService modelCallAccountingService,
             ModelConfigRepository modelConfigRepository,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            BillingUsageApplicationService billingUsageApplicationService
     ) {
         this.modelGatewayService = modelGatewayService;
+        this.modelCallAccountingService = modelCallAccountingService;
         this.modelConfigRepository = modelConfigRepository;
         this.objectMapper = objectMapper;
+        this.billingUsageApplicationService = billingUsageApplicationService;
     }
 
     @Override
@@ -51,43 +63,77 @@ public class LlmNodeExecutor implements WorkflowNodeExecutor {
     @SuppressWarnings("unchecked")
     public NodeExecutionResult execute(NodeExecutionContext ctx) {
         LlmNodeConfig nodeConfig = parseConfig(ctx.node().getConfigJson());
-        String systemPrompt = getSystemPrompt(ctx);
+        String systemPrompt = getSystemPrompt(ctx, nodeConfig);
         List<ModelGatewayConversationMessage> messages = buildMessages(ctx);
         PreparedModelConfig modelConfig = resolveModelConfig(ctx, nodeConfig);
+        if (ctx.executionBudget() != null && modelConfig.maxTokens() == null) {
+            modelConfig = withMaxTokens(
+                    modelConfig, ctx.executionBudget().resolveMaxOutputTokens(modelConfig.maxTokens()));
+        }
         String sessionMemorySummary = stringContext(ctx, "session_memory_summary");
         String retrievalContext = stringContext(ctx, "retrieval_context");
+        int inputTokenUpperBound = modelGatewayService.estimateInputTokenUpperBound(
+                systemPrompt, sessionMemorySummary, retrievalContext, messages, List.of());
 
-        ModelGatewayChatCompletion completion = modelGatewayService.generateChatCompletion(
-                modelConfig,
-                systemPrompt,
-                sessionMemorySummary,
-                retrievalContext,
-                messages,
-                List.of()
-        );
+        PreparedChatTurn accountingTurn = accountingTurn(ctx.accountingTurn(), modelConfig);
+        WorkflowExecutionBudget.ModelCallPermit budgetPermit = ctx.executionBudget() == null
+                ? null
+                : ctx.executionBudget().beforeModelCall(inputTokenUpperBound, modelConfig.maxTokens());
+        Long reservationId = accountingTurn == null ? null
+                : billingUsageApplicationService.beginOfficialModelCall(
+                        ctx.userId(), modelConfig, inputTokenUpperBound);
+        boolean accounted = false;
+        boolean budgetRecorded = false;
+        ModelGatewayChatCompletion completion;
+        try {
+            completion = modelGatewayService.generateChatCompletion(
+                    modelConfig, systemPrompt, sessionMemorySummary, retrievalContext, messages, List.of());
+            if (accountingTurn != null) {
+                modelCallAccountingService.recordSuccess(accountingTurn, completion, reservationId);
+                accounted = true;
+            }
+            if (ctx.executionBudget() != null) {
+                ctx.executionBudget().recordModelUsage(budgetPermit, completion);
+                budgetRecorded = true;
+            }
+        } finally {
+            if (accountingTurn != null && !accounted) {
+                billingUsageApplicationService.releaseOfficialModelCall(ctx.userId(), reservationId);
+            }
+            if (ctx.executionBudget() != null && !budgetRecorded) {
+                ctx.executionBudget().releaseModelCall(budgetPermit);
+            }
+        }
 
         return new NodeExecutionResult(null, Map.of(
                 "llm_output", completion.content(),
                 "llm_provider", completion.provider().name(),
                 "llm_model", completion.modelName(),
-                "llm_prompt_tokens", completion.promptTokens(),
-                "llm_completion_tokens", completion.completionTokens()
+                "llm_prompt_tokens", completion.promptTokens() == null ? 0 : completion.promptTokens(),
+                "llm_completion_tokens", completion.completionTokens() == null ? 0 : completion.completionTokens()
         ));
     }
 
-    private String getSystemPrompt(NodeExecutionContext ctx) {
-        try {
-            JsonNode nodeConfig = objectMapper.readTree(ctx.node().getConfigJson());
-            if (nodeConfig.has("systemPrompt") && !nodeConfig.get("systemPrompt").isNull()) {
-                String prompt = nodeConfig.get("systemPrompt").asText();
-                if (!prompt.isBlank()) {
-                    return prompt;
-                }
-            }
-        } catch (Exception ignored) {
-        }
-        Object sp = ctx.context().get("system_prompt");
-        return sp != null ? sp.toString() : "";
+    private String getSystemPrompt(NodeExecutionContext ctx, LlmNodeConfig nodeConfig) {
+        String configured = nodeConfig.systemPrompt();
+        Object fallback = ctx.context().get("system_prompt");
+        String prompt = configured != null && !configured.isBlank()
+                ? configured : fallback == null ? "" : fallback.toString();
+        return resolveSystemPromptTemplates(prompt, ctx.context());
+    }
+
+    private String resolveSystemPromptTemplates(String prompt, Map<String, Object> context) {
+        return WorkflowVariableResolver.resolveTextTemplate(
+                prompt, context, objectMapper, MAX_RESOLVED_SYSTEM_PROMPT_LENGTH, this::promptTooLong);
+    }
+
+    private ApiException promptTooLong() {
+        return new ApiException(
+                "WORKFLOW_SYSTEM_PROMPT_TOO_LONG",
+                "Resolved workflow LLM system prompt must be at most "
+                        + MAX_RESOLVED_SYSTEM_PROMPT_LENGTH + " characters",
+                HttpStatus.BAD_REQUEST
+        );
     }
 
     private LlmNodeConfig parseConfig(String configJson) {
@@ -118,6 +164,17 @@ public class LlmNodeExecutor implements WorkflowNodeExecutor {
                         HttpStatus.BAD_REQUEST
                 );
             }
+            ModelCredentialSource source = modelConfig.getCredentialSource() != null
+                    ? modelConfig.getCredentialSource()
+                    : (modelConfig.getCredential() == null
+                            ? ModelCredentialSource.PLATFORM : ModelCredentialSource.USER);
+            if (source == ModelCredentialSource.PLATFORM) {
+                throw new ApiException(
+                        "WORKFLOW_NODE_PLATFORM_MODEL_UNSUPPORTED",
+                        "A workflow node cannot select a platform model without an official billable model binding",
+                        HttpStatus.FORBIDDEN
+                );
+            }
             baseConfig = snapshotModelConfig(modelConfig);
         }
 
@@ -142,6 +199,30 @@ public class LlmNodeExecutor implements WorkflowNodeExecutor {
         );
     }
 
+    private PreparedChatTurn accountingTurn(PreparedChatTurn source, PreparedModelConfig modelConfig) {
+        if (source == null) {
+            return null;
+        }
+        return new PreparedChatTurn(
+                source.tenantId(),
+                source.userId(),
+                source.agentId(),
+                source.sessionId(),
+                source.userMessageId(),
+                source.latestUserMessageContent(),
+                source.systemPrompt(),
+                source.sessionMemory(),
+                modelConfig,
+                source.knowledgeBase(),
+                source.mcpTools(),
+                source.retrievalContext(),
+                source.retrievalDebug(),
+                source.historyMessages(),
+                source.workflowId(),
+                source.mcpToolApprovalTokens()
+        );
+    }
+
     private PreparedModelConfig snapshotModelConfig(ModelConfig modelConfig) {
         Credential credential = modelConfig.getCredential();
         CredentialSource credentialSource = resolveCredentialSource(modelConfig, credential);
@@ -159,6 +240,15 @@ public class LlmNodeExecutor implements WorkflowNodeExecutor {
                 null,
                 null,
                 null
+        );
+    }
+
+    private PreparedModelConfig withMaxTokens(PreparedModelConfig config, int maxTokens) {
+        return new PreparedModelConfig(
+                config.provider(), config.modelType(), config.modelName(), config.credentialSource(),
+                config.credentialId(), config.credentialCiphertext(), config.temperature(), maxTokens,
+                config.officialModelConfigId(), config.baseUrl(), config.inputPricePerMillion(),
+                config.outputPricePerMillion(), config.currency()
         );
     }
 

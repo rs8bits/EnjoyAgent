@@ -1,7 +1,6 @@
 package com.enjoy.agent.billing.api.response;
 
 import io.swagger.v3.oas.annotations.media.Schema;
-import java.math.BigDecimal;
 import java.time.Instant;
 
 @Schema(name = "RechargeOrderResponse", description = "充值单返回对象")
@@ -19,7 +18,7 @@ public record RechargeOrderResponse(
         String userDisplayName,
 
         @Schema(description = "充值金额", example = "50.000000")
-        BigDecimal amount,
+        String amount,
 
         @Schema(description = "币种", example = "CNY")
         String currency,

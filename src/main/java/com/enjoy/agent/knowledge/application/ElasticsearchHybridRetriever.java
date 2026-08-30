@@ -1,9 +1,11 @@
 package com.enjoy.agent.knowledge.application;
 
+import com.enjoy.agent.knowledge.infrastructure.persistence.KnowledgeDocumentRepository;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
@@ -18,17 +20,20 @@ public class ElasticsearchHybridRetriever implements Retriever {
     private final KnowledgeSearchProperties knowledgeSearchProperties;
     private final KnowledgeSearchGateway knowledgeSearchGateway;
     private final PgVectorRetriever pgVectorRetriever;
+    private final KnowledgeDocumentRepository knowledgeDocumentRepository;
 
     public ElasticsearchHybridRetriever(
             EmbeddingGatewayService embeddingGatewayService,
             KnowledgeSearchProperties knowledgeSearchProperties,
             KnowledgeSearchGateway knowledgeSearchGateway,
-            PgVectorRetriever pgVectorRetriever
+            PgVectorRetriever pgVectorRetriever,
+            KnowledgeDocumentRepository knowledgeDocumentRepository
     ) {
         this.embeddingGatewayService = embeddingGatewayService;
         this.knowledgeSearchProperties = knowledgeSearchProperties;
         this.knowledgeSearchGateway = knowledgeSearchGateway;
         this.pgVectorRetriever = pgVectorRetriever;
+        this.knowledgeDocumentRepository = knowledgeDocumentRepository;
     }
 
     @Override
@@ -52,9 +57,12 @@ public class ElasticsearchHybridRetriever implements Retriever {
                 lexicalTopK
         );
 
+        Set<Long> readyDocumentIds = readyDocumentIds(
+                knowledgeBase.knowledgeBaseId(), denseMatches, lexicalMatches);
+
         Map<Long, FusedCandidate> fused = new LinkedHashMap<>();
-        mergeMatches(fused, denseMatches, true);
-        mergeMatches(fused, lexicalMatches, false);
+        mergeMatches(fused, denseMatches, true, readyDocumentIds);
+        mergeMatches(fused, lexicalMatches, false, readyDocumentIds);
 
         return fused.values().stream()
                 .sorted(Comparator
@@ -65,8 +73,16 @@ public class ElasticsearchHybridRetriever implements Retriever {
                 .toList();
     }
 
-    private void mergeMatches(Map<Long, FusedCandidate> fused, List<KnowledgeSearchMatch> matches, boolean dense) {
+    private void mergeMatches(
+            Map<Long, FusedCandidate> fused,
+            List<KnowledgeSearchMatch> matches,
+            boolean dense,
+            Set<Long> readyDocumentIds
+    ) {
         for (KnowledgeSearchMatch match : matches) {
+            if (!readyDocumentIds.contains(match.documentId())) {
+                continue;
+            }
             FusedCandidate candidate = fused.computeIfAbsent(match.chunkId(), ignored -> new FusedCandidate(
                     match.chunkId(),
                     match.documentId(),
@@ -76,6 +92,22 @@ public class ElasticsearchHybridRetriever implements Retriever {
             ));
             candidate.add(match, dense, knowledgeSearchProperties.getRrfK());
         }
+    }
+
+    private Set<Long> readyDocumentIds(
+            Long knowledgeBaseId,
+            List<KnowledgeSearchMatch> denseMatches,
+            List<KnowledgeSearchMatch> lexicalMatches
+    ) {
+        List<Long> documentIds = java.util.stream.Stream.concat(denseMatches.stream(), lexicalMatches.stream())
+                .map(KnowledgeSearchMatch::documentId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        if (documentIds.isEmpty()) {
+            return Set.of();
+        }
+        return Set.copyOf(knowledgeDocumentRepository.findReadyDocumentIds(knowledgeBaseId, documentIds));
     }
 
     private static final class FusedCandidate {

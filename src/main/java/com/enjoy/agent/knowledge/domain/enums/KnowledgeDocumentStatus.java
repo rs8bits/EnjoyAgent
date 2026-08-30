@@ -9,5 +9,6 @@ public enum KnowledgeDocumentStatus {
     RETRYING,
     INDEXING,
     READY,
-    FAILED
+    FAILED,
+    DELETING
 }

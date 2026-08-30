@@ -12,6 +12,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.UUID;
+import java.util.function.Function;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -36,6 +37,25 @@ public class MinioStorageService {
      * 上传知识库文档到 MinIO。
      */
     public StoredObjectInfo uploadKnowledgeDocument(Long knowledgeBaseId, String originalFilename, String contentType, byte[] fileBytes) {
+        return uploadKnowledgeDocument(
+                knowledgeBaseId,
+                originalFilename,
+                contentType,
+                new ByteArrayInputStream(fileBytes),
+                fileBytes.length
+        );
+    }
+
+    /**
+     * Streams an uploaded document directly to MinIO instead of materializing another full byte array.
+     */
+    public StoredObjectInfo uploadKnowledgeDocument(
+            Long knowledgeBaseId,
+            String originalFilename,
+            String contentType,
+            InputStream inputStream,
+            long objectSize
+    ) {
         String bucket = minioProperties.getBucket();
         String objectKey = buildObjectKey(knowledgeBaseId, originalFilename);
 
@@ -45,7 +65,7 @@ public class MinioStorageService {
                     PutObjectArgs.builder()
                             .bucket(bucket)
                             .object(objectKey)
-                            .stream(new ByteArrayInputStream(fileBytes), fileBytes.length, -1)
+                            .stream(inputStream, objectSize, -1)
                             .contentType(contentType == null || contentType.isBlank() ? "application/octet-stream" : contentType)
                             .build()
             );
@@ -82,14 +102,31 @@ public class MinioStorageService {
      * 下载 MinIO 中的对象内容。
      */
     public byte[] downloadObject(String bucket, String objectKey) {
+        return readObject(bucket, objectKey, inputStream -> {
+            try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+                inputStream.transferTo(outputStream);
+                return outputStream.toByteArray();
+            } catch (Exception ex) {
+                throw new ObjectReadException(ex);
+            }
+        });
+    }
+
+    /**
+     * Keeps the object stream scoped to this call so parsing can be bounded and streaming.
+     */
+    public <T> T readObject(String bucket, String objectKey, Function<InputStream, T> reader) {
         try (InputStream inputStream = minioClient.getObject(
                 GetObjectArgs.builder()
                         .bucket(bucket)
                         .object(objectKey)
                         .build()
-        ); ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
-            inputStream.transferTo(outputStream);
-            return outputStream.toByteArray();
+        )) {
+            return reader.apply(inputStream);
+        } catch (ObjectReadException ex) {
+            throw new ApiException("MINIO_DOWNLOAD_FAILED", "Failed to download file from MinIO", HttpStatus.BAD_GATEWAY);
+        } catch (ApiException ex) {
+            throw ex;
         } catch (Exception ex) {
             throw new ApiException("MINIO_DOWNLOAD_FAILED", "Failed to download file from MinIO", HttpStatus.BAD_GATEWAY);
         }
@@ -139,5 +176,12 @@ public class MinioStorageService {
                 ? "document.bin"
                 : originalFilename.replaceAll("[^a-zA-Z0-9._-]", "_");
         return "market-asset/%s/%s-%s".formatted(safeScope, UUID.randomUUID(), safeFileName);
+    }
+
+    private static final class ObjectReadException extends RuntimeException {
+
+        private ObjectReadException(Throwable cause) {
+            super(cause);
+        }
     }
 }

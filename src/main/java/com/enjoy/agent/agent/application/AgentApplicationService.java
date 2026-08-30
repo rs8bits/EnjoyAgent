@@ -23,6 +23,7 @@ import com.enjoy.agent.shared.security.CurrentUserContext;
 import com.enjoy.agent.tenant.domain.entity.Tenant;
 import com.enjoy.agent.tenant.domain.enums.TenantStatus;
 import com.enjoy.agent.tenant.infrastructure.persistence.TenantRepository;
+import com.enjoy.agent.workflow.domain.entity.Workflow;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
@@ -124,9 +125,17 @@ public class AgentApplicationService {
      * 查询当前租户下的全部 Agent。
      */
     @Transactional(readOnly = true)
-    public Page<AgentResponse> listAgents(Pageable pageable) {
+    public Page<AgentResponse> listAgents(Pageable pageable, String search) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        return agentRepository.findAllByTenant_Id(currentUser.tenantId(), pageable)
+        String normalizedSearch = search == null ? "" : search.trim();
+        Page<Agent> page = normalizedSearch.isEmpty()
+                ? agentRepository.findAllByTenant_Id(currentUser.tenantId(), pageable)
+                : agentRepository.findAllByTenant_IdAndNameContainingIgnoreCase(
+                        currentUser.tenantId(),
+                        normalizedSearch,
+                        pageable
+                );
+        return page
                 .map(this::toResponse);
     }
 
@@ -424,6 +433,7 @@ public class AgentApplicationService {
         ModelConfig modelConfig = agent.getModelConfig();
         OfficialModelConfig officialModelConfig = agent.getOfficialModelConfig();
         KnowledgeBase knowledgeBase = agent.getKnowledgeBase();
+        Workflow workflow = agent.getWorkflow();
         ModelConfig rerankModelConfig = agent.getRerankModelConfig();
         return new AgentResponse(
                 agent.getId(),
@@ -438,6 +448,8 @@ public class AgentApplicationService {
                 officialModelConfig == null ? null : officialModelConfig.getName(),
                 knowledgeBase == null ? null : knowledgeBase.getId(),
                 knowledgeBase == null ? null : knowledgeBase.getName(),
+                workflow == null ? null : workflow.getId(),
+                workflow == null ? null : workflow.getName(),
                 agent.isRerankEnabled(),
                 rerankModelConfig == null ? null : rerankModelConfig.getId(),
                 rerankModelConfig == null ? null : rerankModelConfig.getName(),

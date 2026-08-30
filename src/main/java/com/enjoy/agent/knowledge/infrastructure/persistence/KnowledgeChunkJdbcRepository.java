@@ -66,8 +66,9 @@ public class KnowledgeChunkJdbcRepository {
                        c.content,
                        1 - (c.embedding <=> CAST(? AS vector)) AS score
                 FROM knowledge_chunk c
-                LEFT JOIN knowledge_document d ON d.id = c.document_id
+                JOIN knowledge_document d ON d.id = c.document_id
                 WHERE c.knowledge_base_id = ?
+                  AND d.status = 'READY'
                 ORDER BY c.embedding <=> CAST(? AS vector)
                 LIMIT ?
                 """;
@@ -98,6 +99,17 @@ public class KnowledgeChunkJdbcRepository {
      * 查询某个文档下的全部切片，用于重建 Elasticsearch 索引。
      */
     public List<KnowledgeChunkSearchDocument> findSearchDocumentsByDocumentId(Long documentId) {
+        return findSearchDocumentsByDocumentIdAfterChunkId(documentId, 0L, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Keyset page used by Elasticsearch bulk indexing so a large document is never fully reloaded.
+     */
+    public List<KnowledgeChunkSearchDocument> findSearchDocumentsByDocumentIdAfterChunkId(
+            Long documentId,
+            long afterChunkId,
+            int limit
+    ) {
         String sql = """
                 SELECT c.id AS chunk_id,
                        c.tenant_id,
@@ -111,8 +123,9 @@ public class KnowledgeChunkJdbcRepository {
                        c.updated_at
                 FROM knowledge_chunk c
                 JOIN knowledge_document d ON d.id = c.document_id
-                WHERE c.document_id = ?
-                ORDER BY c.chunk_index ASC
+                WHERE c.document_id = ? AND c.id > ?
+                ORDER BY c.id ASC
+                LIMIT ?
                 """;
 
         return jdbcTemplate.query(
@@ -129,7 +142,9 @@ public class KnowledgeChunkJdbcRepository {
                         toInstant(rs.getTimestamp("created_at").toInstant()),
                         toInstant(rs.getTimestamp("updated_at").toInstant())
                 ),
-                documentId
+                documentId,
+                afterChunkId,
+                limit
         );
     }
 

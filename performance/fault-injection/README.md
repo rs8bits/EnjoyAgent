@@ -22,7 +22,7 @@ The HTTP 408 scenario represents an upstream timeout response. A 4xx timeout is 
 Build and generate the fixture if necessary:
 
 ```bash
-/Applications/IntelliJ\ IDEA.app/Contents/plugins/maven/lib/maven3/bin/mvn clean package
+./mvnw clean package
 python3 performance/fixtures/generate-document.py \
   --bytes 65536 \
   --output performance/fixtures/generated/document-64k.txt

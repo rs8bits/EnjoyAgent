@@ -5,11 +5,18 @@ import com.enjoy.agent.modelgateway.application.ModelGatewayProperties;
 import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
 import com.enjoy.agent.shared.crypto.AesCryptoService;
 import com.enjoy.agent.shared.exception.ApiException;
+import com.enjoy.agent.shared.security.OutboundUrlPolicy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +27,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 
 /**
  * 基于百炼文本排序接口的二阶段重排器。
@@ -36,18 +44,27 @@ public class DashScopeReranker implements Reranker {
     private final KnowledgeProperties knowledgeProperties;
     private final ObjectMapper objectMapper;
     private final RestClient restClient;
+    private final OutboundUrlPolicy outboundUrlPolicy;
 
     public DashScopeReranker(
             AesCryptoService aesCryptoService,
             ModelGatewayProperties modelGatewayProperties,
             KnowledgeProperties knowledgeProperties,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            OutboundUrlPolicy outboundUrlPolicy
     ) {
         this.aesCryptoService = aesCryptoService;
         this.modelGatewayProperties = modelGatewayProperties;
         this.knowledgeProperties = knowledgeProperties;
         this.objectMapper = objectMapper;
-        this.restClient = RestClient.builder().build();
+        this.outboundUrlPolicy = outboundUrlPolicy;
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(knowledgeProperties.getRerankConnectTimeout())
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(knowledgeProperties.getRerankReadTimeout());
+        this.restClient = RestClient.builder().requestFactory(requestFactory).build();
     }
 
     @Override
@@ -71,14 +88,29 @@ public class DashScopeReranker implements Reranker {
             validateRerankModelConfig(rerankModelConfig);
             String apiKey = resolveApiKey(rerankModelConfig);
             ObjectNode requestBody = buildRequestBody(rerankModelConfig, query, limitedCandidates);
-            String rawResponse = restClient.post()
-                    .uri(URI.create(knowledgeProperties.getRerankBaseUrl() + RERANK_PATH))
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .headers(headers -> headers.setBearerAuth(apiKey))
-                    .body(objectMapper.writeValueAsString(requestBody))
-                    .retrieve()
-                    .body(String.class);
+            URI endpoint = outboundUrlPolicy.requireAllowedHttpUrl(
+                    knowledgeProperties.getRerankBaseUrl() + RERANK_PATH,
+                    "RERANK_URL_NOT_ALLOWED"
+            );
+            String rawResponse = callWithTimeout(() -> restClient.post()
+                            .uri(endpoint)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .accept(MediaType.APPLICATION_JSON)
+                            .headers(headers -> headers.setBearerAuth(apiKey))
+                            .body(objectMapper.writeValueAsString(requestBody))
+                            .exchange((request, response) -> {
+                                if (!response.getStatusCode().is2xxSuccessful()) {
+                                    throw new IllegalStateException(
+                                            "Rerank upstream returned HTTP " + response.getStatusCode().value());
+                                }
+                                byte[] bytes = response.getBody().readNBytes(
+                                        knowledgeProperties.getRerankMaxResponseBytes() + 1);
+                                if (bytes.length > knowledgeProperties.getRerankMaxResponseBytes()) {
+                                    throw new IllegalStateException("Rerank response exceeded configured size limit");
+                                }
+                                return new String(bytes, StandardCharsets.UTF_8);
+                            }),
+                    knowledgeProperties.getRerankRequestTimeout());
 
             return toHits(limitedCandidates, finalTopK, objectMapper.readTree(rawResponse));
         } catch (Exception ex) {
@@ -203,6 +235,26 @@ public class DashScopeReranker implements Reranker {
 
     private Double doubleOrNull(JsonNode value) {
         return value == null || value.isNull() ? null : value.asDouble();
+    }
+
+    private <T> T callWithTimeout(java.util.concurrent.Callable<T> action, java.time.Duration timeout) throws Exception {
+        var executor = Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            var future = executor.submit(action);
+            try {
+                return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (TimeoutException ex) {
+                future.cancel(true);
+                throw new IllegalStateException("Rerank request timed out", ex);
+            } catch (ExecutionException ex) {
+                if (ex.getCause() instanceof Exception exception) {
+                    throw exception;
+                }
+                throw new IllegalStateException(ex.getCause());
+            }
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private record RankedResult(Double score, Integer rank) {

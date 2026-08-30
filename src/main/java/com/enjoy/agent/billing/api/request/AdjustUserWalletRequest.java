@@ -1,6 +1,7 @@
 package com.enjoy.agent.billing.api.request;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
@@ -9,6 +10,7 @@ import java.math.BigDecimal;
 public record AdjustUserWalletRequest(
         @Schema(description = "调整金额，正数加款，负数扣款", example = "-5.50")
         @NotNull
+        @Digits(integer = 12, fraction = 6)
         BigDecimal amountDelta,
 
         @Schema(description = "调整说明", example = "客服补偿")

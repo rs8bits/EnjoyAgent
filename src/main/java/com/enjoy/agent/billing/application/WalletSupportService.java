@@ -52,7 +52,13 @@ public class WalletSupportService {
     @Transactional
     public UserWallet loadOrCreateWalletForUpdate(Long userId) {
         return userWalletRepository.findByUserIdForUpdate(userId)
-                .orElseGet(() -> createWallet(requireUser(userId)));
+                .orElseGet(() -> {
+                    if (userWalletRepository.lockUserForWalletCreation(userId).isEmpty()) {
+                        requireUser(userId);
+                    }
+                    return userWalletRepository.findByUserIdForUpdate(userId)
+                            .orElseGet(() -> createWallet(requireUser(userId)));
+                });
     }
 
     @Transactional(readOnly = true)
@@ -70,12 +76,15 @@ public class WalletSupportService {
             Long referenceId,
             String description
     ) {
+        BigDecimal normalizedBalance = BillingMoney.normalize(wallet.getBalance());
+        BigDecimal normalizedDelta = BillingMoney.normalize(amountDelta);
+        wallet.setBalance(normalizedBalance);
         UserWalletTransaction transaction = new UserWalletTransaction();
         transaction.setWallet(wallet);
         transaction.setUser(wallet.getUser());
         transaction.setTransactionType(transactionType);
-        transaction.setAmountDelta(amountDelta);
-        transaction.setBalanceAfter(wallet.getBalance());
+        transaction.setAmountDelta(normalizedDelta);
+        transaction.setBalanceAfter(normalizedBalance);
         transaction.setCurrency(wallet.getCurrency());
         transaction.setReferenceType(referenceType);
         transaction.setReferenceId(referenceId);
@@ -86,7 +95,7 @@ public class WalletSupportService {
     public UserWalletResponse toWalletResponse(UserWallet wallet) {
         return new UserWalletResponse(
                 wallet.getUser().getId(),
-                wallet.getBalance(),
+                decimalString(wallet.getBalance()),
                 wallet.getCurrency(),
                 wallet.getStatus().name(),
                 wallet.getUpdatedAt()
@@ -97,8 +106,8 @@ public class WalletSupportService {
         return new UserWalletTransactionResponse(
                 transaction.getId(),
                 transaction.getTransactionType().name(),
-                transaction.getAmountDelta(),
-                transaction.getBalanceAfter(),
+                decimalString(transaction.getAmountDelta()),
+                decimalString(transaction.getBalanceAfter()),
                 transaction.getCurrency(),
                 transaction.getReferenceType() == null ? null : transaction.getReferenceType().name(),
                 transaction.getReferenceId(),
@@ -113,7 +122,7 @@ public class WalletSupportService {
                 order.getUser().getId(),
                 order.getUser().getEmail(),
                 order.getUser().getDisplayName(),
-                order.getAmount(),
+                decimalString(order.getAmount()),
                 order.getCurrency(),
                 order.getStatus().name(),
                 order.getRemark(),
@@ -129,6 +138,7 @@ public class WalletSupportService {
         UserWallet wallet = new UserWallet();
         wallet.setUser(user);
         wallet.setBalance(BigDecimal.ZERO);
+        wallet.setReservedAmount(BigDecimal.ZERO);
         wallet.setCurrency(normalizeCurrency(billingProperties.getCurrency()));
         wallet.setStatus(UserWalletStatus.ACTIVE);
         return userWalletRepository.saveAndFlush(wallet);
@@ -141,6 +151,10 @@ public class WalletSupportService {
 
     private String normalizeCurrency(String currency) {
         return currency == null ? "CNY" : currency.trim().toUpperCase();
+    }
+
+    private String decimalString(BigDecimal value) {
+        return value == null ? "0" : value.toPlainString();
     }
 
     private String normalizeText(String value) {

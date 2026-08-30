@@ -6,5 +6,6 @@ package com.enjoy.agent.billing.domain.enums;
 public enum BillingUsageEventStatus {
     PENDING,
     PROCESSED,
-    FAILED
+    FAILED,
+    ABANDONED
 }

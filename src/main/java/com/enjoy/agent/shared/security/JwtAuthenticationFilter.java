@@ -23,18 +23,24 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
+    public static final String COOKIE_AUTHENTICATION_ATTRIBUTE =
+            JwtAuthenticationFilter.class.getName() + ".COOKIE_AUTHENTICATION";
+
     private final JwtTokenProvider jwtTokenProvider;
     private final AuthenticationSnapshotService authenticationSnapshotService;
     private final AuthenticationEntryPoint authenticationEntryPoint;
+    private final AccessTokenCookieService accessTokenCookieService;
 
     public JwtAuthenticationFilter(
             JwtTokenProvider jwtTokenProvider,
             AuthenticationSnapshotService authenticationSnapshotService,
-            AuthenticationEntryPoint authenticationEntryPoint
+            AuthenticationEntryPoint authenticationEntryPoint,
+            AccessTokenCookieService accessTokenCookieService
     ) {
         this.jwtTokenProvider = jwtTokenProvider;
         this.authenticationSnapshotService = authenticationSnapshotService;
         this.authenticationEntryPoint = authenticationEntryPoint;
+        this.accessTokenCookieService = accessTokenCookieService;
     }
 
     /**
@@ -47,38 +53,45 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             FilterChain filterChain
     ) throws ServletException, IOException {
         try {
-            String token = resolveToken(request);
-            if (token == null) {
+            ResolvedToken resolvedToken = resolveToken(request);
+            if (resolvedToken == null) {
                 filterChain.doFilter(request, response);
                 return;
             }
 
-            JwtTokenClaims claims = jwtTokenProvider.parseToken(token);
-            AuthenticatedUser authenticatedUser = authenticationSnapshotService.load(
-                    claims.tenantId(),
-                    claims.userId()
-            );
+            JwtTokenClaims claims;
+            AuthenticatedUser authenticatedUser;
+            try {
+                claims = jwtTokenProvider.parseToken(resolvedToken.value());
+                authenticatedUser = authenticationSnapshotService.load(
+                        claims.tenantId(),
+                        claims.userId()
+                );
+            } catch (JwtException | IllegalArgumentException ex) {
+                authenticationEntryPoint.commence(
+                        request,
+                        response,
+                        new BadCredentialsException("Invalid or expired access token", ex)
+                );
+                return;
+            } catch (BadCredentialsException ex) {
+                authenticationEntryPoint.commence(request, response, ex);
+                return;
+            }
 
             UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                     authenticatedUser,
-                    token,
+                    resolvedToken.value(),
                     authenticatedUser.authorities()
             );
             authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
 
             SecurityContextHolder.getContext().setAuthentication(authentication);
+            request.setAttribute(COOKIE_AUTHENTICATION_ATTRIBUTE, resolvedToken.cookieBased());
             TenantContext.setTenantId(authenticatedUser.tenantId());
             MDC.put("tenantId", String.valueOf(authenticatedUser.tenantId()));
 
             filterChain.doFilter(request, response);
-        } catch (JwtException | IllegalArgumentException ex) {
-            authenticationEntryPoint.commence(
-                    request,
-                    response,
-                    new BadCredentialsException("Invalid or expired access token", ex)
-            );
-        } catch (BadCredentialsException ex) {
-            authenticationEntryPoint.commence(request, response, ex);
         } finally {
             MDC.remove("tenantId");
             TenantContext.clear();
@@ -86,15 +99,27 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
     }
 
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        String path = request.getRequestURI();
+        return "/api/auth/login".equals(path)
+                || "/api/auth/register".equals(path)
+                || "/api/auth/logout".equals(path);
+    }
+
     /**
      * 从 Authorization 头里提取 Bearer Token。
      */
-    private String resolveToken(HttpServletRequest request) {
+    private ResolvedToken resolveToken(HttpServletRequest request) {
         String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
-        if (authorization == null || !authorization.startsWith("Bearer ")) {
-            return null;
+        if (authorization != null && authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            String token = authorization.substring(7).trim();
+            return token.isEmpty() ? null : new ResolvedToken(token, false);
         }
-        return authorization.substring(7).trim();
+        String cookieToken = accessTokenCookieService.read(request);
+        return cookieToken == null ? null : new ResolvedToken(cookieToken, true);
     }
 
+    private record ResolvedToken(String value, boolean cookieBased) {
+    }
 }

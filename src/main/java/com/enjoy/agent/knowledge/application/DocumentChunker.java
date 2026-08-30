@@ -1,7 +1,9 @@
 package com.enjoy.agent.knowledge.application;
 
+import com.enjoy.agent.shared.exception.ApiException;
 import java.util.ArrayList;
 import java.util.List;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
 /**
@@ -30,6 +32,13 @@ public class DocumentChunker {
             int end = Math.min(start + chunkSize, normalizedText.length());
             String chunk = normalizedText.substring(start, end).trim();
             if (!chunk.isBlank()) {
+                if (chunks.size() >= knowledgeProperties.getMaxChunksPerDocument()) {
+                    throw new ApiException(
+                            "DOCUMENT_CHUNK_LIMIT_EXCEEDED",
+                            "Document produces more chunks than allowed",
+                            HttpStatus.PAYLOAD_TOO_LARGE
+                    );
+                }
                 chunks.add(chunk);
             }
             if (end == normalizedText.length()) {

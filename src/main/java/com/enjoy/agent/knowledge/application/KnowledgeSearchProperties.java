@@ -68,6 +68,9 @@ public class KnowledgeSearchProperties {
      */
     private String searchAnalyzer = "standard";
 
+    /** Maximum number of documents in one Elasticsearch bulk request. */
+    private int bulkBatchSize = 250;
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -162,5 +165,16 @@ public class KnowledgeSearchProperties {
 
     public void setSearchAnalyzer(String searchAnalyzer) {
         this.searchAnalyzer = searchAnalyzer;
+    }
+
+    public int getBulkBatchSize() {
+        return bulkBatchSize;
+    }
+
+    public void setBulkBatchSize(int bulkBatchSize) {
+        if (bulkBatchSize < 1) {
+            throw new IllegalArgumentException("Knowledge search bulk batch size must be positive");
+        }
+        this.bulkBatchSize = bulkBatchSize;
     }
 }

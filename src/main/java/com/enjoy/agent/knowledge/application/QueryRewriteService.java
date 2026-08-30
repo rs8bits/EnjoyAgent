@@ -53,6 +53,10 @@ public class QueryRewriteService {
         }
         if (!knowledgeProperties.isQueryRewriteEnabled()
                 || chatModelConfig == null
+                // Query rewriting currently has no independent model-call log/accounting context.
+                // Never spend platform credit through this optional optimization; official-model
+                // calls are reserved and accounted only by the enclosing chat/workflow pipelines.
+                || chatModelConfig.officialModelConfigId() != null
                 || ((!StringUtils.hasText(sessionMemorySummary))
                 && (historyMessages == null || historyMessages.size() <= 1))) {
             return new QueryRewriteResult(originalQuery, originalQuery, false);

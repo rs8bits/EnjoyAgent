@@ -10,6 +10,8 @@ import com.enjoy.agent.modelgateway.application.ModelGatewayProperties;
 import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
 import com.enjoy.agent.modelgateway.domain.enums.CredentialSource;
 import com.enjoy.agent.shared.crypto.AesCryptoService;
+import com.enjoy.agent.shared.security.OutboundUrlPolicy;
+import com.enjoy.agent.shared.security.OutboundUrlProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -71,7 +73,8 @@ class DashScopeRerankerTest {
                 aesCryptoService,
                 modelGatewayProperties,
                 knowledgeProperties,
-                objectMapper
+                objectMapper,
+                allowPrivateOutboundPolicy()
         );
 
         List<KnowledgeRetrievalHit> hits = reranker.rerank(
@@ -119,7 +122,8 @@ class DashScopeRerankerTest {
                 aesCryptoService,
                 modelGatewayProperties,
                 knowledgeProperties,
-                objectMapper
+                objectMapper,
+                allowPrivateOutboundPolicy()
         );
 
         List<KnowledgeRetrievalHit> hits = reranker.rerank(
@@ -149,6 +153,13 @@ class DashScopeRerankerTest {
                 BigDecimal.ZERO,
                 512
         );
+    }
+
+    private OutboundUrlPolicy allowPrivateOutboundPolicy() {
+        OutboundUrlProperties properties = new OutboundUrlProperties();
+        properties.setAllowPrivateAddresses(true);
+        properties.setAllowPlainHttp(true);
+        return new OutboundUrlPolicy(properties);
     }
 
     private void json(HttpExchange exchange, String body) throws IOException {

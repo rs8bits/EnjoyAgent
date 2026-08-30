@@ -13,6 +13,7 @@ import com.enjoy.agent.shared.crypto.AesCryptoService;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
+import com.enjoy.agent.tenant.domain.enums.TenantMemberRole;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -82,6 +83,10 @@ public class McpRuntimeService {
      */
     @Transactional
     public List<McpToolResponse> syncToolsFromServer(Long serverId) {
+        if (CurrentUserContext.requireCurrentUser().role() != TenantMemberRole.OWNER) {
+            throw new ApiException("TENANT_OWNER_REQUIRED",
+                    "Only tenant owners can synchronize MCP tools", HttpStatus.FORBIDDEN);
+        }
         McpServer server = requireTenantOwnedServer(serverId);
         PreparedMcpServer preparedServer = toPreparedServer(server);
         List<DiscoveredMcpTool> discoveredTools = mcpGatewayService.listTools(preparedServer);
@@ -105,7 +110,7 @@ public class McpRuntimeService {
                 tool.getName(),
                 tool.getDescription(),
                 tool.getInputSchemaJson(),
-                tool.getRiskLevel() == null ? McpToolRiskLevel.LOW : tool.getRiskLevel(),
+                tool.getRiskLevel() == null ? McpToolRiskLevel.HIGH : tool.getRiskLevel(),
                 preparedServers.computeIfAbsent(tool.getServer().getId(), ignored -> toPreparedServer(tool.getServer()))
         );
     }

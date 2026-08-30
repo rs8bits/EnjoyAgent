@@ -29,6 +29,11 @@ public class KnowledgeIngestProperties {
     private Duration publisherConfirmTimeout = Duration.ofSeconds(5);
     private Duration outboxPublishRetryDelay = Duration.ofSeconds(2);
     private Duration processingLeaseDuration = Duration.ofMinutes(10);
+    private int leaseReaperBatchSize = 50;
+    private int cleanupBatchSize = 20;
+    private Duration cleanupGracePeriod = Duration.ofSeconds(30);
+    private Duration cleanupClaimTimeout = Duration.ofMinutes(2);
+    private Duration cleanupRetryDelay = Duration.ofSeconds(10);
 
     public boolean isAsyncEnabled() {
         return asyncEnabled;
@@ -83,6 +88,9 @@ public class KnowledgeIngestProperties {
     }
 
     public void setWorkerConcurrency(int workerConcurrency) {
+        if (workerConcurrency < 1) {
+            throw new IllegalArgumentException("Knowledge worker concurrency must be positive");
+        }
         this.workerConcurrency = workerConcurrency;
     }
 
@@ -91,6 +99,9 @@ public class KnowledgeIngestProperties {
     }
 
     public void setPrefetch(int prefetch) {
+        if (prefetch < 1) {
+            throw new IllegalArgumentException("Knowledge worker prefetch must be positive");
+        }
         this.prefetch = prefetch;
     }
 
@@ -99,6 +110,9 @@ public class KnowledgeIngestProperties {
     }
 
     public void setMaxAttempts(int maxAttempts) {
+        if (maxAttempts < 1) {
+            throw new IllegalArgumentException("Knowledge ingest max attempts must be positive");
+        }
         this.maxAttempts = maxAttempts;
     }
 
@@ -107,7 +121,10 @@ public class KnowledgeIngestProperties {
     }
 
     public void setRetryDelays(List<Duration> retryDelays) {
-        this.retryDelays = retryDelays;
+        if (retryDelays == null || retryDelays.stream().anyMatch(delay -> delay == null || delay.isNegative())) {
+            throw new IllegalArgumentException("Knowledge ingest retry delays must not contain negative values");
+        }
+        this.retryDelays = new ArrayList<>(retryDelays);
     }
 
     public int getOutboxBatchSize() {
@@ -115,6 +132,9 @@ public class KnowledgeIngestProperties {
     }
 
     public void setOutboxBatchSize(int outboxBatchSize) {
+        if (outboxBatchSize < 1) {
+            throw new IllegalArgumentException("Knowledge outbox batch size must be positive");
+        }
         this.outboxBatchSize = outboxBatchSize;
     }
 
@@ -123,7 +143,7 @@ public class KnowledgeIngestProperties {
     }
 
     public void setOutboxClaimTimeout(Duration outboxClaimTimeout) {
-        this.outboxClaimTimeout = outboxClaimTimeout;
+        this.outboxClaimTimeout = requirePositive(outboxClaimTimeout, "outbox claim timeout");
     }
 
     public Duration getPublisherConfirmTimeout() {
@@ -131,7 +151,7 @@ public class KnowledgeIngestProperties {
     }
 
     public void setPublisherConfirmTimeout(Duration publisherConfirmTimeout) {
-        this.publisherConfirmTimeout = publisherConfirmTimeout;
+        this.publisherConfirmTimeout = requirePositive(publisherConfirmTimeout, "publisher confirm timeout");
     }
 
     public Duration getOutboxPublishRetryDelay() {
@@ -139,7 +159,7 @@ public class KnowledgeIngestProperties {
     }
 
     public void setOutboxPublishRetryDelay(Duration outboxPublishRetryDelay) {
-        this.outboxPublishRetryDelay = outboxPublishRetryDelay;
+        this.outboxPublishRetryDelay = requirePositive(outboxPublishRetryDelay, "outbox publish retry delay");
     }
 
     public Duration getProcessingLeaseDuration() {
@@ -147,7 +167,66 @@ public class KnowledgeIngestProperties {
     }
 
     public void setProcessingLeaseDuration(Duration processingLeaseDuration) {
+        if (processingLeaseDuration == null || processingLeaseDuration.isNegative() || processingLeaseDuration.isZero()) {
+            throw new IllegalArgumentException("Knowledge processing lease duration must be positive");
+        }
         this.processingLeaseDuration = processingLeaseDuration;
+    }
+
+    public int getLeaseReaperBatchSize() {
+        return leaseReaperBatchSize;
+    }
+
+    public void setLeaseReaperBatchSize(int leaseReaperBatchSize) {
+        if (leaseReaperBatchSize < 1) {
+            throw new IllegalArgumentException("Knowledge lease reaper batch size must be positive");
+        }
+        this.leaseReaperBatchSize = leaseReaperBatchSize;
+    }
+
+    public int getCleanupBatchSize() {
+        return cleanupBatchSize;
+    }
+
+    public void setCleanupBatchSize(int cleanupBatchSize) {
+        if (cleanupBatchSize < 1) {
+            throw new IllegalArgumentException("Knowledge cleanup batch size must be positive");
+        }
+        this.cleanupBatchSize = cleanupBatchSize;
+    }
+
+    public Duration getCleanupClaimTimeout() {
+        return cleanupClaimTimeout;
+    }
+
+    public Duration getCleanupGracePeriod() {
+        return cleanupGracePeriod;
+    }
+
+    public void setCleanupGracePeriod(Duration cleanupGracePeriod) {
+        if (cleanupGracePeriod == null || cleanupGracePeriod.isNegative()) {
+            throw new IllegalArgumentException("Knowledge cleanup grace period must not be negative");
+        }
+        this.cleanupGracePeriod = cleanupGracePeriod;
+    }
+
+    public void setCleanupClaimTimeout(Duration cleanupClaimTimeout) {
+        this.cleanupClaimTimeout = requirePositive(cleanupClaimTimeout, "cleanup claim timeout");
+    }
+
+    public Duration getCleanupRetryDelay() {
+        return cleanupRetryDelay;
+    }
+
+    public void setCleanupRetryDelay(Duration cleanupRetryDelay) {
+        this.cleanupRetryDelay = requirePositive(cleanupRetryDelay, "cleanup retry delay");
+    }
+
+    private Duration requirePositive(Duration value, String name) {
+        if (value == null || value.isNegative() || value.isZero()) {
+            throw new IllegalArgumentException("Knowledge " + name + " must be positive");
+        }
+        return value;
     }
 
     public Duration retryDelayForAttempt(int completedAttempt) {

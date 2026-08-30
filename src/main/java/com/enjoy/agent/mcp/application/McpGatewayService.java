@@ -1,301 +1,279 @@
 package com.enjoy.agent.mcp.application;
 
+import com.enjoy.agent.mcp.domain.enums.McpTransportType;
 import com.enjoy.agent.shared.exception.ApiException;
+import com.enjoy.agent.shared.security.OutboundUrlPolicy;
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.modelcontextprotocol.client.McpClient;
+import io.modelcontextprotocol.client.McpSyncClient;
+import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
+import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
+import io.modelcontextprotocol.spec.McpError;
+import io.modelcontextprotocol.spec.McpSchema;
 import java.net.URI;
+import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicLong;
-import com.enjoy.agent.mcp.domain.enums.McpTransportType;
-import org.springframework.http.HttpHeaders;
+import java.util.LinkedHashMap;
+import java.util.function.Supplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.HttpStatusCode;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-import org.springframework.web.client.RestClient;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 
 /**
- * MCP HTTP 网关。
+ * 基于 Spring AI 所集成 MCP Java SDK 的动态 MCP 网关。
+ *
+ * <p>每次操作仍按租户运行时快照创建短生命周期客户端，因此数据库中的 Server URL、
+ * 静态 Bearer 或刷新后的 OAuth Token 不会进入全局 {@code spring.ai.mcp.*} 配置。
+ * initialize、协议协商、Session header、JSON-RPC 与 SSE 响应解析均由 SDK 负责。</p>
  */
 @Service
 public class McpGatewayService {
 
-    private static final String MCP_PROTOCOL_VERSION = "2025-03-26";
+    private static final Logger log = LoggerFactory.getLogger(McpGatewayService.class);
+    private static final String CLIENT_NAME = "enjoy-agent";
+    private static final String CLIENT_VERSION = "0.0.1-SNAPSHOT";
 
-    private final RestClient restClient;
     private final ObjectMapper objectMapper;
-    private final AtomicLong requestIdSequence = new AtomicLong(1);
+    private final McpRuntimeProperties runtimeProperties;
+    private final OutboundUrlPolicy outboundUrlPolicy;
 
-    public McpGatewayService(ObjectMapper objectMapper, McpRuntimeProperties runtimeProperties) {
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofSeconds(runtimeProperties.getHttpConnectTimeoutSeconds()));
-        requestFactory.setReadTimeout(Duration.ofSeconds(runtimeProperties.getHttpReadTimeoutSeconds()));
-        this.restClient = RestClient.builder().requestFactory(requestFactory).build();
+    public McpGatewayService(
+            ObjectMapper objectMapper,
+            McpRuntimeProperties runtimeProperties,
+            OutboundUrlPolicy outboundUrlPolicy
+    ) {
         this.objectMapper = objectMapper;
+        this.runtimeProperties = runtimeProperties;
+        this.outboundUrlPolicy = outboundUrlPolicy;
     }
 
     /**
-     * 通过 tools/list 读取远端 MCP Server 的工具目录。
+     * 通过 tools/list 读取远端 MCP Server 的完整工具目录。
+     * SDK 的无参 listTools 会自动处理 nextCursor 分页。
      */
     public List<DiscoveredMcpTool> listTools(PreparedMcpServer server) {
-        McpSession session = initialize(server);
-        List<DiscoveredMcpTool> tools = new ArrayList<>();
-        String cursor = null;
-        do {
-            ObjectNode params = objectMapper.createObjectNode();
-            if (cursor != null) {
-                params.put("cursor", cursor);
+        validateSupportedTransport(server);
+        McpSyncClient client = createClient(server);
+        try {
+            initialize(client, server);
+            McpSchema.ListToolsResult result = invoke(
+                    server,
+                    "tools/list",
+                    "MCP_SERVER_INVOCATION_FAILED",
+                    "Failed to list MCP tools",
+                    client::listTools
+            );
+            if (result == null || result.tools() == null) {
+                throw invalidResponse("MCP server returned an empty tools/list result");
             }
-            JsonNode response = postJsonRpc(session, "tools/list", params, true);
-            JsonNode result = response.path("result");
-            for (JsonNode toolNode : result.path("tools")) {
-                JsonNode inputSchema = toolNode.path("inputSchema");
-                tools.add(new DiscoveredMcpTool(
-                        toolNode.path("name").asText(),
-                        textOrNull(toolNode.get("description")),
-                        inputSchema.isMissingNode() || inputSchema.isNull() ? null : toJson(inputSchema)
-                ));
-            }
-            cursor = textOrNull(result.get("nextCursor"));
-        } while (cursor != null);
-        return tools;
+            return result.tools().stream()
+                    .map(tool -> new DiscoveredMcpTool(
+                            tool.name(),
+                            tool.description(),
+                            tool.inputSchema() == null ? null : toJson(tool.inputSchema())
+                    ))
+                    .toList();
+        } finally {
+            closeQuietly(client, server);
+        }
     }
 
     /**
-     * 调用某个 MCP 工具。
+     * 调用某个 MCP 工具并同时保留模型可见文本与完整协议结果。
      */
     public McpToolCallResult callTool(PreparedMcpTool tool, Map<String, Object> arguments) {
-        McpSession session = initialize(tool.server());
-        JsonNode params = objectMapper.createObjectNode()
-                .put("name", tool.name())
-                .set("arguments", objectMapper.valueToTree(arguments == null ? Map.of() : arguments));
-
-        JsonNode response = postJsonRpc(session, "tools/call", params, true);
-        JsonNode result = response.path("result");
-        return new McpToolCallResult(toModelVisibleContent(result), toJson(result));
-    }
-
-    private McpSession initialize(PreparedMcpServer server) {
-        validateSupportedTransport(server);
-        long requestId = nextRequestId();
-        ObjectNode initializeParams = objectMapper.createObjectNode();
-        initializeParams.put("protocolVersion", MCP_PROTOCOL_VERSION);
-        initializeParams.set("capabilities", objectMapper.createObjectNode());
-        initializeParams.set("clientInfo", objectMapper.createObjectNode()
-                .put("name", "enjoy-agent")
-                .put("version", "0.0.1-SNAPSHOT"));
-
-        JsonNode initializeRequest = objectMapper.createObjectNode()
-                .put("jsonrpc", "2.0")
-                .put("id", requestId)
-                .put("method", "initialize")
-                .set("params", initializeParams);
-
-        McpHttpResponse entity = restClient.post()
-                .uri(URI.create(server.baseUrl()))
-                .contentType(MediaType.APPLICATION_JSON)
-                .accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
-                .headers(headers -> applyAuth(server, headers))
-                .body(toJson(initializeRequest))
-                .exchange((request, clientResponse) -> {
-                    String body = clientResponse.bodyTo(String.class);
-                    return new McpHttpResponse(
-                            body,
-                            clientResponse.getHeaders().getFirst("Mcp-Session-Id"),
-                            clientResponse.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE),
-                            clientResponse.getStatusCode()
-                    );
-                });
-
-        if (!entity.status().is2xxSuccessful()) {
-            throw new ApiException(
-                    "MCP_INITIALIZE_FAILED",
-                    "Failed to initialize MCP session: " + describeHttpFailure(entity.status(), entity.body()),
-                    HttpStatus.BAD_GATEWAY
-            );
-        }
-
-        JsonNode initializeResponse = parseJsonRpcResponse(entity.body(), entity.contentType(), requestId);
-        if (initializeResponse.has("error")) {
-            throw new ApiException(
-                    "MCP_INITIALIZE_FAILED",
-                    "MCP server initialize returned error: " + extractJsonRpcErrorMessage(initializeResponse),
-                    HttpStatus.BAD_GATEWAY
-            );
-        }
-
-        postInitializedNotification(server, entity.sessionId());
-        return new McpSession(server, entity.sessionId());
-    }
-
-    private void postInitializedNotification(PreparedMcpServer server, String sessionId) {
-        JsonNode initializedRequest = objectMapper.createObjectNode()
-                .put("jsonrpc", "2.0")
-                .put("method", "notifications/initialized");
-
-        HttpStatusCode status = restClient.post()
-                .uri(URI.create(server.baseUrl()))
-                .contentType(MediaType.APPLICATION_JSON)
-                .accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
-                .headers(headers -> {
-                    applyAuth(server, headers);
-                    if (StringUtils.hasText(sessionId)) {
-                        headers.add("Mcp-Session-Id", sessionId);
-                    }
-                })
-                .body(toJson(initializedRequest))
-                .exchange((request, clientResponse) -> HttpStatus.valueOf(clientResponse.getStatusCode().value()));
-
-        if (!status.is2xxSuccessful()) {
-            throw new ApiException("MCP_INITIALIZE_FAILED", "MCP server did not accept initialized notification", HttpStatus.BAD_GATEWAY);
+        try (McpTurnSession turnSession = openTurnSession()) {
+            return turnSession.callTool(tool, arguments);
         }
     }
 
-    private JsonNode postJsonRpc(McpSession session, String method, JsonNode params, boolean responseRequired) {
-        long requestId = nextRequestId();
-        JsonNode requestBody = objectMapper.createObjectNode()
-                .put("jsonrpc", "2.0")
-                .put("id", requestId)
-                .put("method", method)
-                .set("params", params == null ? objectMapper.createObjectNode() : params);
-
-        McpHttpResponse response = restClient.post()
-                .uri(URI.create(session.server().baseUrl()))
-                .contentType(MediaType.APPLICATION_JSON)
-                .accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
-                .headers(headers -> {
-                    applyAuth(session.server(), headers);
-                    if (StringUtils.hasText(session.sessionId())) {
-                        headers.add("Mcp-Session-Id", session.sessionId());
-                    }
-                })
-                .body(toJson(requestBody))
-                .exchange((request, clientResponse) -> new McpHttpResponse(
-                        clientResponse.bodyTo(String.class),
-                        clientResponse.getHeaders().getFirst("Mcp-Session-Id"),
-                        clientResponse.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE),
-                        clientResponse.getStatusCode()
-                ));
-
-        if (!response.status().is2xxSuccessful()) {
-            throw new ApiException(
-                    "MCP_SERVER_INVOCATION_FAILED",
-                    "MCP server invocation failed: " + describeHttpFailure(response.status(), response.body()),
-                    HttpStatus.BAD_GATEWAY
-            );
-        }
-        if (!responseRequired) {
-            return objectMapper.createObjectNode();
-        }
-        JsonNode json = parseJsonRpcResponse(response.body(), response.contentType(), requestId);
-        if (json.has("error")) {
-            throw new ApiException(
-                    "MCP_SERVER_INVOCATION_FAILED",
-                    extractJsonRpcErrorMessage(json),
-                    HttpStatus.BAD_GATEWAY
-            );
-        }
-        return json;
+    public McpTurnSession openTurnSession() {
+        return new McpTurnSession();
     }
 
-    private JsonNode parseJsonRpcResponse(String rawBody, String contentType, long requestId) {
-        if (!StringUtils.hasText(rawBody)) {
-            throw new ApiException("MCP_SERVER_RESPONSE_INVALID", "MCP server returned empty response", HttpStatus.BAD_GATEWAY);
+    private McpToolCallResult callTool(
+            PreparedMcpTool tool,
+            Map<String, Object> arguments,
+            McpSyncClient client
+    ) {
+        PreparedMcpServer server = tool.server();
+        // Re-resolve and validate immediately before every runtime operation. This also
+        // catches a destination whose DNS answer changed after the turn session opened.
+        requireHttpEndpoint(server.baseUrl());
+        McpSchema.CallToolRequest request = new McpSchema.CallToolRequest(
+                tool.name(), arguments == null ? Map.of() : arguments);
+        McpSchema.CallToolResult result = invoke(
+                server, "tools/call", "MCP_SERVER_INVOCATION_FAILED", "Failed to invoke MCP tool",
+                () -> client.callTool(request));
+        if (result == null) {
+            throw invalidResponse("MCP server returned an empty tools/call result");
         }
+        String rawResponsePayload = toJson(result);
+        return new McpToolCallResult(
+                toModelVisibleContent(result, rawResponsePayload), rawResponsePayload,
+                Boolean.TRUE.equals(result.isError()));
+    }
+
+    public final class McpTurnSession implements AutoCloseable {
+        private final Map<Long, ClientHolder> clients = new LinkedHashMap<>();
+        private boolean closed;
+        private int toolCallCount;
+        private int cumulativeResultChars;
+
+        public McpToolCallResult callTool(PreparedMcpTool tool, Map<String, Object> arguments) {
+            if (closed) {
+                throw new IllegalStateException("MCP turn session is already closed");
+            }
+            if (toolCallCount >= runtimeProperties.getMaxToolCallsPerTurn()) {
+                throw new ApiException("MCP_TOOL_CALL_LIMIT_EXCEEDED",
+                        "MCP tool call limit exceeded for this turn", HttpStatus.BAD_REQUEST);
+            }
+            // Count the attempt before opening/using a client. Failed initialization,
+            // invocation and oversized responses must still consume this turn's budget.
+            toolCallCount++;
+            PreparedMcpServer server = tool.server();
+            ClientHolder holder = clients.computeIfAbsent(server.id(), ignored -> openClient(server));
+            McpToolCallResult result = McpGatewayService.this.callTool(tool, arguments, holder.client());
+            int responseChars = Math.max(
+                    result.rawResponsePayload() == null ? 0 : result.rawResponsePayload().length(),
+                    result.modelVisibleContent() == null ? 0 : result.modelVisibleContent().length());
+            if (responseChars > runtimeProperties.getMaxToolResponseChars()) {
+                throw new ApiException("MCP_TOOL_RESPONSE_TOO_LARGE",
+                        "MCP tool response exceeded the configured limit", HttpStatus.BAD_GATEWAY);
+            }
+            cumulativeResultChars += result.modelVisibleContent() == null ? 0 : result.modelVisibleContent().length();
+            if (cumulativeResultChars > runtimeProperties.getMaxCumulativeToolResultChars()) {
+                throw new ApiException("MCP_TOOL_RESULT_BUDGET_EXCEEDED",
+                        "Cumulative MCP tool results exceeded the turn budget", HttpStatus.BAD_REQUEST);
+            }
+            return result;
+        }
+
+        private ClientHolder openClient(PreparedMcpServer server) {
+            validateSupportedTransport(server);
+            McpSyncClient client = createClient(server);
+            try {
+                initialize(client, server);
+                return new ClientHolder(server, client);
+            } catch (RuntimeException ex) {
+                closeQuietly(client, server);
+                throw ex;
+            }
+        }
+
+        @Override
+        public void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            clients.values().forEach(holder -> closeQuietly(holder.client(), holder.server()));
+            clients.clear();
+        }
+    }
+
+    private record ClientHolder(PreparedMcpServer server, McpSyncClient client) {
+    }
+
+    private McpSyncClient createClient(PreparedMcpServer server) {
         try {
-            if (contentType != null && contentType.startsWith(MediaType.TEXT_EVENT_STREAM_VALUE)) {
-                JsonNode sseJson = parseSseJsonRpc(rawBody, requestId);
-                if (sseJson != null) {
-                    return sseJson;
-                }
+            URI endpoint = requireHttpEndpoint(server.baseUrl());
+            HttpClientStreamableHttpTransport.Builder transportBuilder = HttpClientStreamableHttpTransport
+                    .builder(originOf(endpoint))
+                    .endpoint(endpoint.toString())
+                    .jsonMapper(new JacksonMcpJsonMapper(objectMapper))
+                    .connectTimeout(Duration.ofSeconds(runtimeProperties.getHttpConnectTimeoutSeconds()))
+                    .clientBuilder(new BoundedHttpClientBuilder(runtimeProperties.getMaxHttpResponseBytes())
+                            .followRedirects(HttpClient.Redirect.NEVER))
+                    .openConnectionOnStartup(false);
+
+            if (StringUtils.hasText(server.bearerToken())) {
+                String bearerToken = server.bearerToken();
+                transportBuilder.httpRequestCustomizer((request, method, uri, body, context) ->
+                        request.header("Authorization", "Bearer " + bearerToken));
             }
-            JsonNode json = objectMapper.readTree(rawBody);
-            if (json.isArray()) {
-                for (JsonNode item : json) {
-                    if (item.path("id").asLong(-1) == requestId) {
-                        return item;
-                    }
-                }
-            }
-            return json;
-        } catch (JsonProcessingException ex) {
-            throw new ApiException("MCP_SERVER_RESPONSE_INVALID", "Failed to parse MCP server response", HttpStatus.BAD_GATEWAY);
+
+            return McpClient.sync(transportBuilder.build())
+                    .clientInfo(new McpSchema.Implementation(CLIENT_NAME, CLIENT_VERSION))
+                    .requestTimeout(Duration.ofSeconds(runtimeProperties.getHttpReadTimeoutSeconds()))
+                    .initializationTimeout(Duration.ofSeconds(runtimeProperties.getHttpReadTimeoutSeconds()))
+                    .build();
+        } catch (ApiException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw gatewayException(
+                    server,
+                    "client/create",
+                    "MCP_INITIALIZE_FAILED",
+                    "Failed to create MCP client",
+                    ex
+            );
         }
     }
 
-    private JsonNode parseSseJsonRpc(String rawBody, long requestId) throws JsonProcessingException {
-        String[] events = rawBody.split("\\R\\R");
-        for (String event : events) {
-            StringBuilder data = new StringBuilder();
-            for (String line : event.split("\\R")) {
-                if (line.startsWith("data:")) {
-                    if (!data.isEmpty()) {
-                        data.append('\n');
-                    }
-                    data.append(line.substring(5).trim());
-                }
-            }
-            if (data.isEmpty()) {
-                continue;
-            }
-            JsonNode json = objectMapper.readTree(data.toString());
-            if (json.path("id").asLong(-1) == requestId) {
-                return json;
-            }
+    private void initialize(McpSyncClient client, PreparedMcpServer server) {
+        McpSchema.InitializeResult result = invoke(
+                server,
+                "initialize",
+                "MCP_INITIALIZE_FAILED",
+                "Failed to initialize MCP session",
+                client::initialize
+        );
+        if (result == null) {
+            throw invalidResponse("MCP server returned an empty initialize result");
         }
-        return null;
     }
 
-    private void applyAuth(PreparedMcpServer server, HttpHeaders headers) {
-        if (!StringUtils.hasText(server.bearerToken())) {
-            return;
-        }
-        headers.setBearerAuth(server.bearerToken());
-    }
-
-    private String toModelVisibleContent(JsonNode result) {
-        List<String> texts = new ArrayList<>();
-        for (JsonNode contentNode : result.path("content")) {
-            if ("text".equals(contentNode.path("type").asText()) && contentNode.hasNonNull("text")) {
-                texts.add(contentNode.path("text").asText());
-            } else if (!contentNode.isMissingNode() && !contentNode.isNull()) {
-                texts.add(toJson(contentNode));
-            }
-        }
-        if (!texts.isEmpty()) {
-            return String.join("\n", texts);
-        }
-        JsonNode structuredContent = result.get("structuredContent");
-        if (structuredContent != null && !structuredContent.isNull()) {
-            return toJson(structuredContent);
-        }
-        return toJson(result);
-    }
-
-    private String textOrNull(JsonNode node) {
-        if (node == null || node.isNull() || node.asText().isBlank()) {
-            return null;
-        }
-        return node.asText();
-    }
-
-    private String toJson(Object value) {
+    private <T> T invoke(
+            PreparedMcpServer server,
+            String operation,
+            String errorCode,
+            String message,
+            Supplier<T> invocation
+    ) {
         try {
-            return objectMapper.writeValueAsString(value);
-        } catch (JsonProcessingException ex) {
-            throw new ApiException("JSON_SERIALIZATION_FAILED", "Failed to serialize JSON payload", HttpStatus.INTERNAL_SERVER_ERROR);
+            requireHttpEndpoint(server.baseUrl());
+            return invocation.get();
+        } catch (ApiException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw gatewayException(server, operation, errorCode, message, ex);
         }
     }
 
-    private long nextRequestId() {
-        return requestIdSequence.getAndIncrement();
+    private String toModelVisibleContent(McpSchema.CallToolResult result, String rawResponsePayload) {
+        List<String> values = new ArrayList<>();
+        if (result.content() != null) {
+            for (McpSchema.Content content : result.content()) {
+                if (content instanceof McpSchema.TextContent textContent && textContent.text() != null) {
+                    values.add(textContent.text());
+                } else if (content != null) {
+                    values.add(toJson(content));
+                }
+            }
+        }
+        if (!values.isEmpty()) {
+            return String.join("\n", values);
+        }
+        if (result.structuredContent() != null) {
+            return toJson(result.structuredContent());
+        }
+        return rawResponsePayload;
+    }
+
+    private URI requireHttpEndpoint(String value) {
+        return outboundUrlPolicy.requireAllowedHttpUrl(value, "MCP_SERVER_BASE_URL_INVALID");
+    }
+
+    private String originOf(URI endpoint) {
+        return endpoint.getScheme() + "://" + endpoint.getRawAuthority() + "/";
     }
 
     private void validateSupportedTransport(PreparedMcpServer server) {
@@ -309,21 +287,89 @@ public class McpGatewayService {
         );
     }
 
-    private String extractJsonRpcErrorMessage(JsonNode response) {
-        String message = response.path("error").path("message").asText("MCP invocation failed");
-        String data = textOrNull(response.path("error").get("data"));
-        if (data == null) {
-            return message;
+    private ApiException gatewayException(
+            PreparedMcpServer server,
+            String operation,
+            String fallbackCode,
+            String fallbackMessage,
+            RuntimeException cause
+    ) {
+        log.warn(
+                "MCP SDK operation failed, serverId={}, operation={}, errorType={}",
+                server.id(),
+                operation,
+                cause.getClass().getSimpleName()
+        );
+        if (isInvalidResponse(cause)) {
+            return invalidResponse("MCP server returned an invalid response");
         }
-        return message + " (" + abbreviate(data, 300) + ")";
+        if (hasCause(cause, McpResponseLimitException.class)) {
+            return new ApiException(
+                    "MCP_TOOL_RESPONSE_TOO_LARGE",
+                    "MCP server response exceeded the configured byte limit",
+                    HttpStatus.BAD_GATEWAY
+            );
+        }
+        return new ApiException(
+                fallbackCode,
+                fallbackMessage,
+                HttpStatus.BAD_GATEWAY
+        );
     }
 
-    private String describeHttpFailure(HttpStatusCode status, String body) {
-        String message = "HTTP " + status.value();
-        if (!StringUtils.hasText(body)) {
-            return message;
+    private boolean isInvalidResponse(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof JsonProcessingException) {
+                return true;
+            }
+            String message = current.getMessage();
+            if (message != null) {
+                String normalized = message.toLowerCase(Locale.ROOT);
+                if (normalized.contains("deserializ")
+                        || normalized.contains("parsing json-rpc")
+                        || normalized.contains("unknown media type")) {
+                    return true;
+                }
+            }
+            current = current.getCause();
         }
-        return message + " - " + abbreviate(body, 300);
+        return false;
+    }
+
+    private boolean hasCause(Throwable throwable, Class<? extends Throwable> type) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (type.isInstance(current)) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private String exceptionDetail(Throwable throwable) {
+        String detail = McpError.aggregateExceptionMessages(throwable);
+        if (!StringUtils.hasText(detail)) {
+            detail = throwable.getClass().getSimpleName();
+        }
+        return abbreviate(detail, 300);
+    }
+
+    private ApiException invalidResponse(String message) {
+        return new ApiException("MCP_SERVER_RESPONSE_INVALID", message, HttpStatus.BAD_GATEWAY);
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException ex) {
+            throw new ApiException(
+                    "JSON_SERIALIZATION_FAILED",
+                    "Failed to serialize JSON payload",
+                    HttpStatus.INTERNAL_SERVER_ERROR
+            );
+        }
     }
 
     private String abbreviate(String value, int maxChars) {
@@ -333,9 +379,13 @@ public class McpGatewayService {
         return value.substring(0, maxChars) + "...";
     }
 
-    private record McpSession(PreparedMcpServer server, String sessionId) {
-    }
-
-    private record McpHttpResponse(String body, String sessionId, String contentType, HttpStatusCode status) {
+    private void closeQuietly(McpSyncClient client, PreparedMcpServer server) {
+        try {
+            if (!client.closeGracefully()) {
+                log.debug("MCP client did not close gracefully, serverId={}", server.id());
+            }
+        } catch (RuntimeException ex) {
+            log.debug("Failed to close MCP client, serverId={}", server.id(), ex);
+        }
     }
 }

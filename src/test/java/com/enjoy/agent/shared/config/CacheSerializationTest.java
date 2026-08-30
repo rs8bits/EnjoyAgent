@@ -1,11 +1,10 @@
 package com.enjoy.agent.shared.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.enjoy.agent.agent.api.response.AgentResponse;
-import com.enjoy.agent.auth.domain.enums.SystemRole;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
-import com.enjoy.agent.tenant.domain.enums.TenantMemberRole;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.time.Instant;
@@ -13,6 +12,16 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.serializer.RedisSerializer;
 
 class CacheSerializationTest {
+
+    @Test
+    void cacheValueSerializer_shouldRoundTripSessionSummaryString() {
+        ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        RedisSerializer<Object> serializer = new CacheConfig().cacheValueSerializer(objectMapper);
+
+        byte[] bytes = serializer.serialize("bounded session summary");
+
+        assertThat(serializer.deserialize(bytes)).isEqualTo("bounded session summary");
+    }
 
     @Test
     void cacheValueSerializer_shouldRoundTripAgentResponseWithInstantFields() {
@@ -33,6 +42,8 @@ class CacheSerializationTest {
                 null,
                 null,
                 null,
+                21L,
+                "workflow",
                 false,
                 null,
                 null,
@@ -53,7 +64,7 @@ class CacheSerializationTest {
     }
 
     @Test
-    void cacheValueSerializer_shouldRoundTripAuthenticationSnapshot() {
+    void cacheValueSerializer_shouldRejectAuthenticationSnapshotTypeMetadata() {
         ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
         RedisSerializer<Object> serializer = new CacheConfig().cacheValueSerializer(objectMapper);
         AuthenticatedUser original = new AuthenticatedUser(
@@ -63,13 +74,12 @@ class CacheSerializationTest {
                 7L,
                 "tenant-7",
                 "Tenant 7",
-                TenantMemberRole.OWNER,
-                SystemRole.USER
+                null,
+                null
         );
 
         byte[] bytes = serializer.serialize(original);
-        Object restored = serializer.deserialize(bytes);
-
-        assertThat(restored).isInstanceOf(AuthenticatedUser.class).isEqualTo(original);
+        assertThatThrownBy(() -> serializer.deserialize(bytes))
+                .hasMessageContaining("AuthenticatedUser");
     }
 }

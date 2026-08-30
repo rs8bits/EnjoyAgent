@@ -21,6 +21,8 @@ import com.enjoy.agent.shared.crypto.AesCryptoService;
 import com.enjoy.agent.shared.crypto.CredentialProperties;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
+import com.enjoy.agent.shared.security.OutboundUrlPolicy;
+import com.enjoy.agent.shared.security.OutboundUrlProperties;
 import com.enjoy.agent.tenant.domain.entity.Tenant;
 import com.enjoy.agent.tenant.domain.enums.TenantMemberRole;
 import com.sun.net.httpserver.HttpExchange;
@@ -65,6 +67,7 @@ class McpOAuthApplicationServiceTest {
     void setUp() throws Exception {
         CredentialProperties credentialProperties = new CredentialProperties();
         credentialProperties.setAesKey("0123456789abcdef0123456789abcdef");
+        credentialProperties.setAllowInsecureDevelopmentSecret(true);
         credentialProperties.validate();
         aesCryptoService = new AesCryptoService(credentialProperties);
 
@@ -145,7 +148,9 @@ class McpOAuthApplicationServiceTest {
                 mcpOAuthDiscoveryService,
                 oauthProperties(),
                 appUserRepository,
-                aesCryptoService
+                aesCryptoService,
+                runtimeProperties(),
+                allowPrivateOutboundPolicy()
         );
 
         McpOAuthConnectionResponse response = service.connectClientCredentials(
@@ -210,7 +215,9 @@ class McpOAuthApplicationServiceTest {
                 mcpOAuthDiscoveryService,
                 oauthProperties(),
                 appUserRepository,
-                aesCryptoService
+                aesCryptoService,
+                runtimeProperties(),
+                allowPrivateOutboundPolicy()
         );
 
         assertThatThrownBy(() -> service.resolveAccessTokenForRuntime(serverEntity))
@@ -222,7 +229,9 @@ class McpOAuthApplicationServiceTest {
         assertThat(saved.getAccessTokenCiphertext()).isNull();
         assertThat(saved.getRefreshTokenCiphertext()).isNull();
         assertThat(saved.getLastErrorCode()).isEqualTo("MCP_OAUTH_REAUTH_REQUIRED");
-        assertThat(saved.getLastErrorMessage()).contains("refresh token expired");
+        assertThat(saved.getLastErrorMessage())
+                .isEqualTo("OAuth token endpoint returned HTTP 401")
+                .doesNotContain("refresh token expired");
     }
 
     private McpOAuthProperties oauthProperties() {
@@ -232,6 +241,20 @@ class McpOAuthApplicationServiceTest {
         properties.setRefreshSkewSeconds(60);
         properties.setAuthorizationTtlSeconds(600);
         return properties;
+    }
+
+    private McpRuntimeProperties runtimeProperties() {
+        McpRuntimeProperties properties = new McpRuntimeProperties();
+        properties.setHttpConnectTimeoutSeconds(2);
+        properties.setHttpReadTimeoutSeconds(2);
+        return properties;
+    }
+
+    private OutboundUrlPolicy allowPrivateOutboundPolicy() {
+        OutboundUrlProperties properties = new OutboundUrlProperties();
+        properties.setAllowPrivateAddresses(true);
+        properties.setAllowPlainHttp(true);
+        return new OutboundUrlPolicy(properties);
     }
 
     private McpServer serverEntity(McpAuthType authType) {

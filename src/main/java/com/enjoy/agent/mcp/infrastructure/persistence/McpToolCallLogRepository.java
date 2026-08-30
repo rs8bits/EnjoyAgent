@@ -16,6 +16,7 @@ public interface McpToolCallLogRepository extends JpaRepository<McpToolCallLog, 
             select log
             from McpToolCallLog log
             where log.tenantId = :tenantId
+              and (:userId is null or log.userId = :userId)
               and (:sessionId is null or log.sessionId = :sessionId)
               and (:agentId is null or log.agentId = :agentId)
               and (:status is null or log.status = :status)
@@ -23,6 +24,7 @@ public interface McpToolCallLogRepository extends JpaRepository<McpToolCallLog, 
             """)
     List<McpToolCallLog> search(
             @Param("tenantId") Long tenantId,
+            @Param("userId") Long userId,
             @Param("sessionId") Long sessionId,
             @Param("agentId") Long agentId,
             @Param("status") McpToolCallStatus status,

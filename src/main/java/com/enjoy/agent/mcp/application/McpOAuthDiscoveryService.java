@@ -1,9 +1,12 @@
 package com.enjoy.agent.mcp.application;
 
 import com.enjoy.agent.shared.exception.ApiException;
+import com.enjoy.agent.shared.security.OutboundUrlPolicy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -11,6 +14,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -25,13 +29,29 @@ public class McpOAuthDiscoveryService {
 
     private static final Pattern RESOURCE_METADATA_PATTERN = Pattern.compile("resource_metadata=\"([^\"]+)\"");
     private static final String INITIALIZE_REQUEST = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"enjoy-agent\",\"version\":\"0.0.1-SNAPSHOT\"}}}";
-
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
+    private final OutboundUrlPolicy outboundUrlPolicy;
+    private final McpOAuthProperties oauthProperties;
+    private final int httpDeadlineSeconds;
 
-    public McpOAuthDiscoveryService(ObjectMapper objectMapper) {
-        this.restClient = RestClient.builder().build();
+    public McpOAuthDiscoveryService(
+            ObjectMapper objectMapper,
+            McpRuntimeProperties runtimeProperties,
+            OutboundUrlPolicy outboundUrlPolicy,
+            McpOAuthProperties oauthProperties
+    ) {
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(runtimeProperties.getHttpConnectTimeoutSeconds()))
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(Duration.ofSeconds(runtimeProperties.getHttpReadTimeoutSeconds()));
+        this.restClient = RestClient.builder().requestFactory(requestFactory).build();
         this.objectMapper = objectMapper;
+        this.outboundUrlPolicy = outboundUrlPolicy;
+        this.oauthProperties = oauthProperties;
+        this.httpDeadlineSeconds = runtimeProperties.getHttpReadTimeoutSeconds();
     }
 
     /**
@@ -39,16 +59,28 @@ public class McpOAuthDiscoveryService {
      */
     public McpOAuthDiscoveryResult discover(String baseUrl) {
         ProtectedResourceMetadata protectedResourceMetadata = discoverProtectedResourceMetadata(baseUrl);
+        if (StringUtils.hasText(protectedResourceMetadata.resourceIndicator())
+                && !sameNormalizedUri(baseUrl, protectedResourceMetadata.resourceIndicator())) {
+            throw new ApiException(
+                    "MCP_OAUTH_DISCOVERY_FAILED",
+                    "Protected resource metadata does not match the requested MCP resource",
+                    HttpStatus.BAD_GATEWAY);
+        }
         if (protectedResourceMetadata.authorizationServers().isEmpty()) {
             throw new ApiException("MCP_OAUTH_DISCOVERY_FAILED", "Protected resource metadata did not expose authorization_servers", HttpStatus.BAD_GATEWAY);
         }
 
         String issuer = protectedResourceMetadata.authorizationServers().get(0);
+        outboundUrlPolicy.requireAllowedHttpUrl(issuer, "MCP_OAUTH_DISCOVERY_FAILED");
         AuthorizationServerMetadata authorizationServerMetadata = discoverAuthorizationServerMetadata(issuer);
         if (!StringUtils.hasText(authorizationServerMetadata.authorizationEndpoint())
                 || !StringUtils.hasText(authorizationServerMetadata.tokenEndpoint())) {
             throw new ApiException("MCP_OAUTH_DISCOVERY_FAILED", "Authorization server metadata is missing endpoints", HttpStatus.BAD_GATEWAY);
         }
+        outboundUrlPolicy.requireAllowedHttpUrl(
+                authorizationServerMetadata.authorizationEndpoint(), "MCP_OAUTH_DISCOVERY_FAILED");
+        outboundUrlPolicy.requireAllowedHttpUrl(
+                authorizationServerMetadata.tokenEndpoint(), "MCP_OAUTH_DISCOVERY_FAILED");
 
         return new McpOAuthDiscoveryResult(
                 protectedResourceMetadata.metadataUrl(),
@@ -90,7 +122,15 @@ public class McpOAuthDiscoveryService {
         for (String candidate : buildAuthorizationServerMetadataCandidates(issuer)) {
             SimpleHttpResponse response = get(candidate);
             if (response.status().is2xxSuccessful()) {
-                return parseAuthorizationServerMetadata(response.body());
+                AuthorizationServerMetadata metadata = parseAuthorizationServerMetadata(response.body());
+                if (!StringUtils.hasText(metadata.issuer())
+                        || !sameNormalizedUri(issuer, metadata.issuer())) {
+                    throw new ApiException(
+                            "MCP_OAUTH_ISSUER_MISMATCH",
+                            "Authorization server metadata issuer does not match the expected issuer",
+                            HttpStatus.BAD_GATEWAY);
+                }
+                return metadata;
             }
         }
         throw new ApiException("MCP_OAUTH_DISCOVERY_FAILED", "Failed to discover authorization server metadata", HttpStatus.BAD_GATEWAY);
@@ -130,6 +170,7 @@ public class McpOAuthDiscoveryService {
                 }
             }
             return new AuthorizationServerMetadata(
+                    textOrNull(json.get("issuer")),
                     textOrNull(json.get("authorization_endpoint")),
                     textOrNull(json.get("token_endpoint")),
                     pkceS256Supported
@@ -140,27 +181,56 @@ public class McpOAuthDiscoveryService {
     }
 
     private SimpleHttpResponse probeUnauthorizedChallenge(String baseUrl) {
-        return restClient.post()
-                .uri(URI.create(baseUrl))
-                .contentType(MediaType.APPLICATION_JSON)
-                .accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
-                .body(INITIALIZE_REQUEST)
-                .exchange((request, clientResponse) -> new SimpleHttpResponse(
-                        clientResponse.getStatusCode(),
-                        clientResponse.getHeaders(),
-                        clientResponse.bodyTo(String.class)
-                ));
+        URI endpoint = outboundUrlPolicy.requireAllowedHttpUrl(baseUrl, "MCP_OAUTH_DISCOVERY_FAILED");
+        try {
+            return McpHttpDeadline.call(httpDeadlineSeconds, () -> restClient.post()
+                    .uri(endpoint)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
+                    .body(INITIALIZE_REQUEST)
+                    .exchange((request, clientResponse) -> new SimpleHttpResponse(
+                            clientResponse.getStatusCode(),
+                            clientResponse.getHeaders(),
+                            McpBoundedResponseReader.readUtf8(
+                                    clientResponse,
+                                    oauthProperties.getMaxMetadataResponseBytes(),
+                                    "MCP_OAUTH_DISCOVERY_FAILED",
+                                    "OAuth metadata response is too large"
+                            )
+                    )), "MCP_OAUTH_DISCOVERY_FAILED", "OAuth metadata request timed out");
+        } catch (ApiException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw discoveryUnavailable();
+        }
     }
 
     private SimpleHttpResponse get(String url) {
-        return restClient.get()
-                .uri(URI.create(url))
-                .accept(MediaType.APPLICATION_JSON)
-                .exchange((request, clientResponse) -> new SimpleHttpResponse(
-                        clientResponse.getStatusCode(),
-                        clientResponse.getHeaders(),
-                        clientResponse.bodyTo(String.class)
-                ));
+        URI endpoint = outboundUrlPolicy.requireAllowedHttpUrl(url, "MCP_OAUTH_DISCOVERY_FAILED");
+        try {
+            return McpHttpDeadline.call(httpDeadlineSeconds, () -> restClient.get()
+                    .uri(endpoint)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .exchange((request, clientResponse) -> new SimpleHttpResponse(
+                            clientResponse.getStatusCode(),
+                            clientResponse.getHeaders(),
+                            McpBoundedResponseReader.readUtf8(
+                                    clientResponse,
+                                    oauthProperties.getMaxMetadataResponseBytes(),
+                                    "MCP_OAUTH_DISCOVERY_FAILED",
+                                    "OAuth metadata response is too large"
+                            )
+                    )), "MCP_OAUTH_DISCOVERY_FAILED", "OAuth metadata request timed out");
+        } catch (ApiException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw discoveryUnavailable();
+        }
+    }
+
+    private ApiException discoveryUnavailable() {
+        return new ApiException("MCP_OAUTH_DISCOVERY_FAILED",
+                "OAuth metadata endpoint could not be reached", HttpStatus.BAD_GATEWAY);
     }
 
     private List<String> buildProtectedResourceMetadataCandidates(String baseUrl) {
@@ -222,6 +292,20 @@ public class McpOAuthDiscoveryService {
         return value == null || value.isBlank() ? null : value;
     }
 
+    private boolean sameNormalizedUri(String expected, String actual) {
+        try {
+            URI expectedUri = outboundUrlPolicy
+                    .requireAllowedHttpUrl(expected, "MCP_OAUTH_DISCOVERY_FAILED").normalize();
+            URI actualUri = outboundUrlPolicy
+                    .requireAllowedHttpUrl(actual, "MCP_OAUTH_DISCOVERY_FAILED").normalize();
+            return expectedUri.equals(actualUri);
+        } catch (ApiException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            return false;
+        }
+    }
+
     private record ProtectedResourceMetadata(
             String metadataUrl,
             List<String> authorizationServers,
@@ -230,6 +314,7 @@ public class McpOAuthDiscoveryService {
     }
 
     private record AuthorizationServerMetadata(
+            String issuer,
             String authorizationEndpoint,
             String tokenEndpoint,
             boolean pkceS256Supported

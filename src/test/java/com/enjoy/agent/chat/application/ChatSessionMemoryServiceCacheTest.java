@@ -13,6 +13,8 @@ import com.enjoy.agent.chat.infrastructure.persistence.ChatMessageRepository;
 import com.enjoy.agent.chat.infrastructure.persistence.ChatSessionMemoryRepository;
 import com.enjoy.agent.chat.infrastructure.persistence.ChatSessionRepository;
 import com.enjoy.agent.modelgateway.application.ModelGatewayService;
+import com.enjoy.agent.modelgateway.application.ModelCallAccountingService;
+import com.enjoy.agent.billing.application.BillingUsageApplicationService;
 import com.enjoy.agent.shared.config.CacheNames;
 import com.enjoy.agent.shared.config.CacheProperties;
 import java.util.Optional;
@@ -131,13 +133,25 @@ class ChatSessionMemoryServiceCacheTest {
         }
 
         @Bean
+        BillingUsageApplicationService billingUsageApplicationService() {
+            return mock(BillingUsageApplicationService.class);
+        }
+
+        @Bean
+        ModelCallAccountingService modelCallAccountingService() {
+            return mock(ModelCallAccountingService.class);
+        }
+
+        @Bean
         ChatSessionMemoryService chatSessionMemoryService(
                 ChatSessionMemoryRepository memoryRepository,
                 ChatSessionRepository sessionRepository,
                 ChatMessageRepository messageRepository,
                 ModelGatewayService modelGatewayService,
                 TransactionTemplate transactionTemplate,
-                CacheManager cacheManager
+                CacheManager cacheManager,
+                BillingUsageApplicationService billingUsageApplicationService,
+                ModelCallAccountingService modelCallAccountingService
         ) {
             return new ChatSessionMemoryService(
                     memoryRepository,
@@ -145,7 +159,9 @@ class ChatSessionMemoryServiceCacheTest {
                     messageRepository,
                     modelGatewayService,
                     transactionTemplate,
-                    cacheManager
+                    cacheManager,
+                    billingUsageApplicationService,
+                    modelCallAccountingService
             );
         }
     }

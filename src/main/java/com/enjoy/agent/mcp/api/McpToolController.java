@@ -1,6 +1,8 @@
 package com.enjoy.agent.mcp.api;
 
 import com.enjoy.agent.mcp.api.response.McpToolResponse;
+import com.enjoy.agent.mcp.api.response.McpToolApprovalResponse;
+import com.enjoy.agent.mcp.application.McpHighRiskApprovalService;
 import com.enjoy.agent.mcp.application.McpToolApplicationService;
 import com.enjoy.agent.shared.api.ApiResponse;
 import com.enjoy.agent.shared.api.PagedResponse;
@@ -10,6 +12,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -25,9 +28,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class McpToolController {
 
     private final McpToolApplicationService mcpToolApplicationService;
+    private final McpHighRiskApprovalService approvalService;
 
-    public McpToolController(McpToolApplicationService mcpToolApplicationService) {
+    public McpToolController(
+            McpToolApplicationService mcpToolApplicationService,
+            McpHighRiskApprovalService approvalService
+    ) {
         this.mcpToolApplicationService = mcpToolApplicationService;
+        this.approvalService = approvalService;
     }
 
     @Operation(summary = "MCP Tool 列表", description = "分页查询当前租户下的 MCP Tool 列表，可按 Server 过滤")
@@ -44,5 +52,14 @@ public class McpToolController {
     @GetMapping("/{id}")
     public ApiResponse<McpToolResponse> getTool(@PathVariable Long id) {
         return ApiResponse.success(mcpToolApplicationService.getTool(id));
+    }
+
+    @Operation(summary = "审批一次 HIGH 风险工具调用", description = "签发仅绑定当前用户、Agent 与工具的短期令牌")
+    @PostMapping("/{id}/approvals")
+    public ApiResponse<McpToolApprovalResponse> approveHighRiskTool(
+            @PathVariable Long id,
+            @RequestParam Long agentId
+    ) {
+        return ApiResponse.success(approvalService.issueApproval(id, agentId));
     }
 }

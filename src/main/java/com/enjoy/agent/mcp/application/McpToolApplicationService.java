@@ -11,6 +11,7 @@ import com.enjoy.agent.mcp.infrastructure.persistence.McpToolRepository;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
+import com.enjoy.agent.tenant.domain.enums.TenantMemberRole;
 import java.time.Instant;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -50,6 +51,7 @@ public class McpToolApplicationService {
      */
     @Transactional
     public List<McpToolResponse> replaceServerTools(Long serverId, ReplaceMcpServerToolsRequest request) {
+        requireOwner();
         McpServer server = mcpServerApplicationService.requireTenantOwnedServer(serverId);
         List<UpsertMcpToolRequest> requests = request.tools() == null ? List.of() : request.tools();
         return replaceServerTools(server, requests);
@@ -60,6 +62,7 @@ public class McpToolApplicationService {
      */
     @Transactional
     public List<McpToolResponse> replaceServerTools(Long serverId, List<DiscoveredMcpTool> discoveredTools) {
+        requireOwner();
         McpServer server = mcpServerApplicationService.requireTenantOwnedServer(serverId);
         List<UpsertMcpToolRequest> requests = discoveredTools == null
                 ? List.of()
@@ -68,7 +71,7 @@ public class McpToolApplicationService {
                                 tool.name(),
                                 tool.description(),
                                 tool.inputSchemaJson(),
-                                McpToolRiskLevel.LOW,
+                                McpToolRiskLevel.HIGH,
                                 true
                         ))
                         .toList();
@@ -111,7 +114,7 @@ public class McpToolApplicationService {
             tool.setName(normalizedName);
             tool.setDescription(normalizeDescription(toolRequest.description()));
             tool.setInputSchemaJson(normalizeSchema(toolRequest.inputSchemaJson()));
-            tool.setRiskLevel(toolRequest.riskLevel() == null ? McpToolRiskLevel.LOW : toolRequest.riskLevel());
+            tool.setRiskLevel(toolRequest.riskLevel() == null ? McpToolRiskLevel.HIGH : toolRequest.riskLevel());
             tool.setEnabled(toolRequest.enabled() == null || toolRequest.enabled());
             toSave.add(tool);
         }
@@ -196,5 +199,12 @@ public class McpToolApplicationService {
             return null;
         }
         return schemaJson.trim();
+    }
+
+    private void requireOwner() {
+        if (CurrentUserContext.requireCurrentUser().role() != TenantMemberRole.OWNER) {
+            throw new ApiException("TENANT_OWNER_REQUIRED",
+                    "Only tenant owners can modify MCP tool configuration", HttpStatus.FORBIDDEN);
+        }
     }
 }

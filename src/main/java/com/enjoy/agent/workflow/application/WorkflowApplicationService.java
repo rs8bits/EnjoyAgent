@@ -18,7 +18,13 @@ import com.enjoy.agent.workflow.infrastructure.persistence.WorkflowEdgeRepositor
 import com.enjoy.agent.workflow.infrastructure.persistence.WorkflowNodeRepository;
 import com.enjoy.agent.workflow.infrastructure.persistence.WorkflowRepository;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.regex.Pattern;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -28,6 +34,8 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class WorkflowApplicationService {
+
+    private static final Pattern NODE_KEY_PATTERN = Pattern.compile("[A-Za-z0-9_-]{1,64}");
 
     private final WorkflowRepository workflowRepository;
     private final WorkflowNodeRepository workflowNodeRepository;
@@ -75,19 +83,27 @@ public class WorkflowApplicationService {
     @Transactional(readOnly = true)
     public Page<WorkflowResponse> listWorkflows(Pageable pageable) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        return workflowRepository.findAllByTenant_Id(currentUser.tenantId(), pageable)
-                .map(w -> {
-                    int nodeCount = workflowNodeRepository.findAllByWorkflow_IdOrderByIdAsc(w.getId()).size();
-                    int edgeCount = workflowEdgeRepository.findAllByWorkflow_Id(w.getId()).size();
-                    return toResponse(w, nodeCount, edgeCount);
-                });
+        Page<Workflow> workflows = workflowRepository.findAllByTenant_Id(currentUser.tenantId(), pageable);
+        if (workflows.isEmpty()) {
+            return workflows.map(workflow -> toResponse(workflow, 0, 0));
+        }
+        List<Long> workflowIds = workflows.getContent().stream().map(Workflow::getId).toList();
+        Map<Long, Integer> nodeCounts = toCountMap(
+                workflowNodeRepository.countGroupedByWorkflowId(workflowIds));
+        Map<Long, Integer> edgeCounts = toCountMap(
+                workflowEdgeRepository.countGroupedByWorkflowId(workflowIds));
+        return workflows.map(workflow -> toResponse(
+                workflow,
+                nodeCounts.getOrDefault(workflow.getId(), 0),
+                edgeCounts.getOrDefault(workflow.getId(), 0)
+        ));
     }
 
     @Transactional(readOnly = true)
     public WorkflowResponse getWorkflow(Long id) {
         Workflow workflow = requireTenantOwnedWorkflow(id);
-        int nodeCount = workflowNodeRepository.findAllByWorkflow_IdOrderByIdAsc(workflow.getId()).size();
-        int edgeCount = workflowEdgeRepository.findAllByWorkflow_Id(workflow.getId()).size();
+        int nodeCount = Math.toIntExact(workflowNodeRepository.countByWorkflow_Id(workflow.getId()));
+        int edgeCount = Math.toIntExact(workflowEdgeRepository.countByWorkflow_Id(workflow.getId()));
         return toResponse(workflow, nodeCount, edgeCount);
     }
 
@@ -108,8 +124,8 @@ public class WorkflowApplicationService {
         workflow.setEnabled(request.enabled());
 
         Workflow saved = workflowRepository.saveAndFlush(workflow);
-        int nodeCount = workflowNodeRepository.findAllByWorkflow_IdOrderByIdAsc(saved.getId()).size();
-        int edgeCount = workflowEdgeRepository.findAllByWorkflow_Id(saved.getId()).size();
+        int nodeCount = Math.toIntExact(workflowNodeRepository.countByWorkflow_Id(saved.getId()));
+        int edgeCount = Math.toIntExact(workflowEdgeRepository.countByWorkflow_Id(saved.getId()));
         return toResponse(saved, nodeCount, edgeCount);
     }
 
@@ -129,7 +145,7 @@ public class WorkflowApplicationService {
 
         List<WorkflowCanvasResponse.NodeItem> nodeItems = nodes.stream()
                 .map(n -> new WorkflowCanvasResponse.NodeItem(
-                        n.getId(), n.getName(), n.getNodeType().name(),
+                        n.getId(), n.getNodeKey(), n.getName(), n.getNodeType().name(),
                         n.getConfigJson(), n.getPositionX(), n.getPositionY()))
                 .toList();
         List<WorkflowCanvasResponse.EdgeItem> edgeItems = edges.stream()
@@ -144,15 +160,33 @@ public class WorkflowApplicationService {
     @Transactional
     public WorkflowCanvasResponse saveCanvas(Long workflowId, SaveWorkflowCanvasRequest request) {
         Workflow workflow = requireTenantOwnedWorkflow(workflowId);
+        List<WorkflowNode> previousNodes = workflowNodeRepository
+                .findAllByWorkflow_IdOrderByIdAsc(workflow.getId());
+        Map<String, WorkflowNode> previousByKey = new LinkedHashMap<>();
+        for (WorkflowNode previousNode : previousNodes) {
+            previousByKey.put(previousNode.getNodeKey(), previousNode);
+        }
 
         workflowEdgeRepository.deleteAllByWorkflow_Id(workflow.getId());
-        workflowNodeRepository.deleteAllByWorkflow_Id(workflow.getId());
-        workflowNodeRepository.flush();
+        workflowEdgeRepository.flush();
 
         List<WorkflowNode> savedNodes = new ArrayList<>();
-        for (SaveWorkflowCanvasRequest.NodeItem item : request.nodes()) {
-            WorkflowNode node = new WorkflowNode();
-            node.setWorkflow(workflow);
+        Set<String> nodeKeys = new HashSet<>();
+        for (int nodeIndex = 0; nodeIndex < request.nodes().size(); nodeIndex++) {
+            SaveWorkflowCanvasRequest.NodeItem item = request.nodes().get(nodeIndex);
+            String previousNodeKey = nodeIndex < previousNodes.size()
+                    ? previousNodes.get(nodeIndex).getNodeKey() : null;
+            String nodeKey = normalizeNodeKey(item.nodeKey(), previousNodeKey);
+            if (!nodeKeys.add(nodeKey)) {
+                throw new ApiException("WORKFLOW_NODE_KEY_DUPLICATED",
+                        "Workflow nodeKey must be unique within a workflow", HttpStatus.BAD_REQUEST);
+            }
+            WorkflowNode node = previousByKey.remove(nodeKey);
+            if (node == null) {
+                node = new WorkflowNode();
+                node.setWorkflow(workflow);
+            }
+            node.setNodeKey(nodeKey);
             node.setName(item.name());
             node.setNodeType(WorkflowNodeType.valueOf(item.nodeType().trim().toUpperCase()));
             node.setConfigJson(item.configJson() != null ? item.configJson() : "{}");
@@ -161,6 +195,10 @@ public class WorkflowApplicationService {
             savedNodes.add(workflowNodeRepository.save(node));
         }
         workflowNodeRepository.flush();
+        if (!previousByKey.isEmpty()) {
+            workflowNodeRepository.deleteAll(previousByKey.values());
+            workflowNodeRepository.flush();
+        }
 
         List<WorkflowEdge> savedEdges = new ArrayList<>();
         for (SaveWorkflowCanvasRequest.EdgeItem item : request.edges()) {
@@ -186,7 +224,7 @@ public class WorkflowApplicationService {
 
         List<WorkflowCanvasResponse.NodeItem> nodeItems = savedNodes.stream()
                 .map(n -> new WorkflowCanvasResponse.NodeItem(
-                        n.getId(), n.getName(), n.getNodeType().name(),
+                        n.getId(), n.getNodeKey(), n.getName(), n.getNodeType().name(),
                         n.getConfigJson(), n.getPositionX(), n.getPositionY()))
                 .toList();
         List<WorkflowCanvasResponse.EdgeItem> edgeItems = savedEdges.stream()
@@ -219,10 +257,34 @@ public class WorkflowApplicationService {
         );
     }
 
+    private Map<Long, Integer> toCountMap(List<Object[]> rows) {
+        Map<Long, Integer> counts = new LinkedHashMap<>();
+        for (Object[] row : rows) {
+            if (row.length >= 2 && row[0] instanceof Number workflowId && row[1] instanceof Number count) {
+                counts.put(workflowId.longValue(), Math.toIntExact(count.longValue()));
+            }
+        }
+        return counts;
+    }
+
     private String normalizeDescription(String description) {
         if (description == null || description.isBlank()) {
             return null;
         }
         return description.trim();
+    }
+
+    private String normalizeNodeKey(String nodeKey, String previousNodeKey) {
+        String normalized = StringUtils.hasText(nodeKey)
+                ? nodeKey.trim()
+                : (StringUtils.hasText(previousNodeKey)
+                        ? previousNodeKey
+                        : "node_" + UUID.randomUUID().toString().replace("-", ""));
+        if (!NODE_KEY_PATTERN.matcher(normalized).matches()) {
+            throw new ApiException("WORKFLOW_NODE_KEY_INVALID",
+                    "Workflow nodeKey must contain 1-64 letters, digits, underscores or hyphens",
+                    HttpStatus.BAD_REQUEST);
+        }
+        return normalized;
     }
 }

@@ -11,6 +11,7 @@ import com.enjoy.agent.mcp.infrastructure.persistence.McpToolRepository;
 import com.enjoy.agent.shared.exception.ApiException;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
+import com.enjoy.agent.tenant.domain.enums.TenantMemberRole;
 import java.util.ArrayList;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -58,8 +59,12 @@ public class AgentToolBindingApplicationService {
      */
     @Transactional
     public List<AgentToolBindingResponse> replaceBindings(Long agentId, ReplaceAgentToolBindingsRequest request) {
-        Agent agent = requireTenantOwnedAgent(agentId);
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
+        if (currentUser.role() != TenantMemberRole.OWNER) {
+            throw new ApiException("TENANT_OWNER_REQUIRED",
+                    "Only tenant owners can modify Agent tool bindings", HttpStatus.FORBIDDEN);
+        }
+        Agent agent = requireTenantOwnedAgent(agentId);
         List<Long> toolIds = request.toolIds() == null ? List.of() : request.toolIds();
 
         Set<Long> uniqueToolIds = new LinkedHashSet<>(toolIds);

@@ -9,6 +9,7 @@ import com.enjoy.agent.modelgateway.application.ModelGatewayService;
 import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
 import com.enjoy.agent.modelgateway.domain.enums.CredentialSource;
 import java.util.List;
+import java.math.BigDecimal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -120,6 +121,36 @@ class QueryRewriteServiceTest {
         assertThat(result.rewrittenQuery()).isEqualTo("EnjoyAgent 项目是否支持私有部署");
         assertThat(result.rewriteApplied()).isTrue();
         verify(modelGatewayService).generateText(eq(chatModelConfig), anyString(), anyString());
+    }
+
+    @Test
+    void shouldNeverUseUnaccountedOfficialModelForOptionalRewrite() {
+        PreparedModelConfig officialModel = new PreparedModelConfig(
+                CredentialProvider.OPENAI,
+                ModelType.CHAT,
+                "qwen-plus",
+                CredentialSource.PLATFORM,
+                null,
+                null,
+                BigDecimal.ZERO,
+                256,
+                99L,
+                "https://api.openai.com",
+                BigDecimal.ONE,
+                BigDecimal.ONE,
+                "CNY"
+        );
+
+        QueryRewriteResult result = queryRewriteService.rewrite(
+                officialModel,
+                "用户在讨论知识库",
+                List.of(new ChatPromptMessage(ChatMessageRole.USER, "它怎么切片")),
+                "它怎么切片"
+        );
+
+        assertThat(result.rewrittenQuery()).isEqualTo("它怎么切片");
+        assertThat(result.rewriteApplied()).isFalse();
+        verifyNoInteractions(modelGatewayService);
     }
 
     private PreparedModelConfig preparedChatModelConfig() {

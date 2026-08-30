@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -40,6 +41,7 @@ public class ModelConfigController {
      */
     @Operation(summary = "创建模型配置", description = "在当前租户下创建一份可供 Agent 复用的模型配置")
     @PostMapping
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<ModelConfigResponse> createModelConfig(@Valid @RequestBody CreateModelConfigRequest request) {
         return ApiResponse.success(modelConfigApplicationService.createModelConfig(request), "Model config created");
     }
@@ -67,6 +69,7 @@ public class ModelConfigController {
      */
     @Operation(summary = "更新模型配置", description = "更新当前租户下的模型配置，包括推荐模型参数和绑定凭证")
     @PutMapping("/{id}")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<ModelConfigResponse> updateModelConfig(
             @PathVariable Long id,
             @Valid @RequestBody UpdateModelConfigRequest request
@@ -79,6 +82,7 @@ public class ModelConfigController {
      */
     @Operation(summary = "删除模型配置", description = "删除当前租户下的模型配置")
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<Void> deleteModelConfig(@PathVariable Long id) {
         modelConfigApplicationService.deleteModelConfig(id);
         return ApiResponse.success(null, "Model config deleted");

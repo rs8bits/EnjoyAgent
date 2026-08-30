@@ -38,6 +38,9 @@ public class UserWallet extends BaseEntity {
     @Column(name = "balance", nullable = false, precision = 18, scale = 6)
     private BigDecimal balance = BigDecimal.ZERO;
 
+    @Column(name = "reserved_amount", nullable = false, precision = 18, scale = 6)
+    private BigDecimal reservedAmount = BigDecimal.ZERO;
+
     @Column(name = "currency", nullable = false, length = 16)
     private String currency;
 
@@ -67,6 +70,14 @@ public class UserWallet extends BaseEntity {
 
     public void setBalance(BigDecimal balance) {
         this.balance = balance;
+    }
+
+    public BigDecimal getReservedAmount() {
+        return reservedAmount;
+    }
+
+    public void setReservedAmount(BigDecimal reservedAmount) {
+        this.reservedAmount = reservedAmount;
     }
 
     public String getCurrency() {

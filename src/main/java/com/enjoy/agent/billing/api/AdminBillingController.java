@@ -74,4 +74,18 @@ public class AdminBillingController {
     ) {
         return ApiResponse.success(adminBillingApplicationService.adjustUserWallet(userId, request), "Wallet adjusted");
     }
+
+    @Operation(summary = "人工重放失败的用量扣费事件")
+    @PostMapping("/usage-events/{eventId}/replay")
+    public ApiResponse<Void> replayFailedUsageEvent(@PathVariable Long eventId) {
+        adminBillingApplicationService.replayFailedUsageEvent(eventId);
+        return ApiResponse.success(null, "Billing usage event replay scheduled");
+    }
+
+    @Operation(summary = "明确放弃失败的用量扣费并释放冻结额度")
+    @PostMapping("/usage-events/{eventId}/abandon")
+    public ApiResponse<Void> abandonFailedUsageEvent(@PathVariable Long eventId) {
+        adminBillingApplicationService.abandonFailedUsageEvent(eventId);
+        return ApiResponse.success(null, "Billing usage event abandoned and reserved credit released");
+    }
 }

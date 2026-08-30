@@ -6,7 +6,14 @@ import com.enjoy.agent.modelgateway.application.ModelGatewayProperties;
 import com.enjoy.agent.modelgateway.application.PreparedModelConfig;
 import com.enjoy.agent.shared.crypto.AesCryptoService;
 import com.enjoy.agent.shared.exception.ApiException;
+import com.enjoy.agent.shared.security.OutboundUrlPolicy;
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.MetadataMode;
@@ -17,7 +24,9 @@ import org.springframework.ai.openai.OpenAiEmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
 
 /**
  * Embedding 调用网关。
@@ -30,15 +39,18 @@ public class EmbeddingGatewayService {
     private final AesCryptoService aesCryptoService;
     private final ModelGatewayProperties modelGatewayProperties;
     private final KnowledgeProperties knowledgeProperties;
+    private final OutboundUrlPolicy outboundUrlPolicy;
 
     public EmbeddingGatewayService(
             AesCryptoService aesCryptoService,
             ModelGatewayProperties modelGatewayProperties,
-            KnowledgeProperties knowledgeProperties
+            KnowledgeProperties knowledgeProperties,
+            OutboundUrlPolicy outboundUrlPolicy
     ) {
         this.aesCryptoService = aesCryptoService;
         this.modelGatewayProperties = modelGatewayProperties;
         this.knowledgeProperties = knowledgeProperties;
+        this.outboundUrlPolicy = outboundUrlPolicy;
     }
 
     /**
@@ -56,14 +68,28 @@ public class EmbeddingGatewayService {
                     .dimensions(knowledgeProperties.getEmbeddingDimensions())
                     .build();
 
-            String resolvedBaseUrl = resolveBaseUrl(modelConfig);
+            String resolvedBaseUrl = outboundUrlPolicy.requireAllowedHttpUrl(
+                    resolveBaseUrl(modelConfig),
+                    "EMBEDDING_URL_NOT_ALLOWED"
+            ).toString();
+            HttpClient httpClient = HttpClient.newBuilder()
+                    .connectTimeout(knowledgeProperties.getEmbeddingConnectTimeout())
+                    .followRedirects(HttpClient.Redirect.NEVER)
+                    .build();
+            JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+            requestFactory.setReadTimeout(knowledgeProperties.getEmbeddingReadTimeout());
+            RestClient.Builder restClientBuilder = RestClient.builder()
+                    .requestFactory(requestFactory)
+                    .requestInterceptor(new BoundedClientHttpResponseInterceptor(
+                            knowledgeProperties.getEmbeddingMaxResponseBytes()));
             OpenAiApi openAiApi = OpenAiApi.builder()
                     .baseUrl(resolvedBaseUrl)
                     .apiKey(resolveApiKey(modelConfig))
+                    .restClientBuilder(restClientBuilder)
                     .build();
 
             OpenAiEmbeddingModel embeddingModel = new OpenAiEmbeddingModel(openAiApi, MetadataMode.NONE, options);
-            return embedInBatches(embeddingModel, options, texts);
+            return embedInBatches(embeddingModel, options, texts, resolvedBaseUrl);
         } catch (ApiException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -90,17 +116,46 @@ public class EmbeddingGatewayService {
     private List<float[]> embedInBatches(
             OpenAiEmbeddingModel embeddingModel,
             OpenAiEmbeddingOptions options,
-            List<String> texts
-    ) {
+            List<String> texts,
+            String resolvedBaseUrl
+    ) throws Exception {
         int batchSize = knowledgeProperties.getEmbeddingBatchSize();
         List<float[]> vectors = new java.util.ArrayList<>(texts.size());
         for (int start = 0; start < texts.size(); start += batchSize) {
             int end = Math.min(start + batchSize, texts.size());
             List<String> batch = texts.subList(start, end);
-            EmbeddingResponse response = embeddingModel.call(new EmbeddingRequest(batch, options));
+            outboundUrlPolicy.requireAllowedHttpUrl(resolvedBaseUrl, "EMBEDDING_URL_NOT_ALLOWED");
+            EmbeddingResponse response = callWithTimeout(
+                    () -> embeddingModel.call(new EmbeddingRequest(batch, options)),
+                    knowledgeProperties.getEmbeddingRequestTimeout()
+            );
             vectors.addAll(response.getResults().stream().map(Embedding::getOutput).toList());
         }
         return vectors;
+    }
+
+    private <T> T callWithTimeout(java.util.concurrent.Callable<T> action, Duration timeout) throws Exception {
+        var executor = Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            var future = executor.submit(action);
+            try {
+                return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (TimeoutException ex) {
+                future.cancel(true);
+                throw new ApiException(
+                        "EMBEDDING_TIMEOUT",
+                        "Embedding invocation timed out",
+                        HttpStatus.GATEWAY_TIMEOUT
+                );
+            } catch (ExecutionException ex) {
+                if (ex.getCause() instanceof Exception exception) {
+                    throw exception;
+                }
+                throw new IllegalStateException(ex.getCause());
+            }
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     /**

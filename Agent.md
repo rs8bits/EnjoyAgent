@@ -136,6 +136,26 @@ RabbitMQ 负责异步消费，但数据库里的 `billing_usage_event` 才是计
 
 这样即使消息消费失败，也能做重试、补偿和审计。
 
+### 8. Spring AI 是模型与 MCP 协议适配层，不替代平台运行时
+
+项目使用 Spring Boot 3.5 和 Spring AI 1.1。`ModelGatewayService` 使用 Spring AI 的
+`OpenAiChatModel` 处理 OpenAI-compatible 的普通调用、SSE 流式响应、usage 和 tool-call
+协议映射，但保留现有的网关门面：调用方仍使用 `PreparedModelConfig`、
+`ModelGatewayResult` 和 `ModelGatewayInvocationException`。
+
+不能直接依赖全局 `spring.ai.openai.*` 自动配置，因为模型、Base URL 与 API Key 均按租户、
+用户和模型配置在运行时决定。每次调用都会由当前快照构造模型，敏感 key 不进入全局 Bean。
+
+`McpGatewayService` 使用 Spring AI 1.1 集成的 MCP Java SDK，按租户快照动态创建
+`McpSyncClient` 和 Streamable HTTP transport。协议版本协商、initialize/initialized、
+Session header、JSON-RPC、JSON/SSE 响应和工具目录分页由 SDK 处理；Server URL 与刷新后的
+Bearer/OAuth Token 仍不会进入启动期全局配置。
+
+MCP 的数据库驱动 Server、OAuth token 刷新、工具审计和显式多轮治理，以及可持久化 DAG 的
+分支、循环、节点事件和执行历史仍是平台业务能力，继续由 `McpRuntimeService`、
+`McpChatOrchestratorService` 与 `DagExecutor` 控制。模型每一轮工具规划都会独立记录 usage、
+计费和模型日志；因此暂不交给 `ChatClient` 隐式执行整个工具循环。
+
 ## 编码边界
 
 - Controller 保持轻量，只做协议层转换

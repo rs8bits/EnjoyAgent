@@ -6,6 +6,7 @@ import com.enjoy.agent.mcp.domain.enums.McpToolCallStatus;
 import com.enjoy.agent.mcp.infrastructure.persistence.McpToolCallLogRepository;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
+import com.enjoy.agent.tenant.domain.enums.TenantMemberRole;
 import java.util.List;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -27,8 +28,10 @@ public class McpToolCallLogApplicationService {
     public List<McpToolCallLogResponse> listLogs(Long sessionId, Long agentId, McpToolCallStatus status, Integer limit) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
         int size = limit == null ? 50 : Math.min(Math.max(limit, 1), 200);
+        Long scopedUserId = currentUser.role() == TenantMemberRole.OWNER ? null : currentUser.userId();
         return mcpToolCallLogRepository.search(
                         currentUser.tenantId(),
+                        scopedUserId,
                         sessionId,
                         agentId,
                         status,

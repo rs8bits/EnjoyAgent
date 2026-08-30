@@ -24,6 +24,32 @@ public record PreparedChatTurn(
         String retrievalContext,
         KnowledgeRetrievalDebug retrievalDebug,
         List<ChatPromptMessage> historyMessages,
-        Long workflowId
+        Long workflowId,
+        List<String> mcpToolApprovalTokens
 ) {
+    public PreparedChatTurn(
+            Long tenantId,
+            Long userId,
+            Long agentId,
+            Long sessionId,
+            Long userMessageId,
+            String latestUserMessageContent,
+            String systemPrompt,
+            PreparedSessionMemory sessionMemory,
+            PreparedModelConfig modelConfig,
+            PreparedKnowledgeBase knowledgeBase,
+            List<PreparedMcpTool> mcpTools,
+            String retrievalContext,
+            KnowledgeRetrievalDebug retrievalDebug,
+            List<ChatPromptMessage> historyMessages,
+            Long workflowId
+    ) {
+        this(tenantId, userId, agentId, sessionId, userMessageId, latestUserMessageContent, systemPrompt,
+                sessionMemory, modelConfig, knowledgeBase, mcpTools, retrievalContext, retrievalDebug,
+                historyMessages, workflowId, List.of());
+    }
+
+    public PreparedChatTurn {
+        mcpToolApprovalTokens = mcpToolApprovalTokens == null ? List.of() : List.copyOf(mcpToolApprovalTokens);
+    }
 }

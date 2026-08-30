@@ -14,9 +14,14 @@ import org.springframework.stereotype.Service;
 public class KnowledgeSearchIndexer {
 
     private final KnowledgeSearchGateway knowledgeSearchGateway;
+    private final KnowledgeSearchProperties searchProperties;
 
-    public KnowledgeSearchIndexer(KnowledgeSearchGateway knowledgeSearchGateway) {
+    public KnowledgeSearchIndexer(
+            KnowledgeSearchGateway knowledgeSearchGateway,
+            KnowledgeSearchProperties searchProperties
+    ) {
         this.knowledgeSearchGateway = knowledgeSearchGateway;
+        this.searchProperties = searchProperties;
     }
 
     public boolean isEnabled() {
@@ -59,7 +64,18 @@ public class KnowledgeSearchIndexer {
      * 直接把检索文档批量写入 Elasticsearch。
      */
     public void indexSearchDocuments(List<KnowledgeChunkSearchDocument> documents) {
-        knowledgeSearchGateway.bulkUpsert(documents);
+        if (!knowledgeSearchGateway.isEnabled()) {
+            return;
+        }
+        int batchSize = bulkBatchSize();
+        for (int start = 0; start < documents.size(); start += batchSize) {
+            int end = Math.min(start + batchSize, documents.size());
+            knowledgeSearchGateway.bulkUpsert(documents.subList(start, end));
+        }
+    }
+
+    public int bulkBatchSize() {
+        return searchProperties.getBulkBatchSize();
     }
 
     /**

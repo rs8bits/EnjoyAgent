@@ -1,7 +1,6 @@
 package com.enjoy.agent.billing.api.response;
 
 import io.swagger.v3.oas.annotations.media.Schema;
-import java.math.BigDecimal;
 import java.time.Instant;
 
 @Schema(name = "UserWalletTransactionResponse", description = "用户钱包流水返回对象")
@@ -13,10 +12,10 @@ public record UserWalletTransactionResponse(
         String transactionType,
 
         @Schema(description = "变动金额", example = "-0.005300")
-        BigDecimal amountDelta,
+        String amountDelta,
 
         @Schema(description = "变动后余额", example = "88.494700")
-        BigDecimal balanceAfter,
+        String balanceAfter,
 
         @Schema(description = "币种", example = "CNY")
         String currency,

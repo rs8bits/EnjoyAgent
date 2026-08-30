@@ -28,6 +28,10 @@ public class WorkflowNode {
     @JoinColumn(name = "workflow_id", nullable = false)
     private Workflow workflow;
 
+    /** Stable identity retained when saveCanvas regenerates database ids. */
+    @Column(name = "node_key", nullable = false, length = 64)
+    private String nodeKey;
+
     @Column(name = "name", nullable = false, length = 128)
     private String name;
 
@@ -64,6 +68,14 @@ public class WorkflowNode {
 
     public void setWorkflow(Workflow workflow) {
         this.workflow = workflow;
+    }
+
+    public String getNodeKey() {
+        return nodeKey;
+    }
+
+    public void setNodeKey(String nodeKey) {
+        this.nodeKey = nodeKey;
     }
 
     public String getName() {

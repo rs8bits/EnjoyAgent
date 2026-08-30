@@ -17,8 +17,8 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 加载 JWT 对应的当前成员安全快照。
  *
- * <p>快照来自数据库而不是盲信 JWT 中的可变字段。短 TTL 与跨实例失效消息共同限制
- * 成员禁用、角色调整等操作的生效窗口。</p>
+ * <p>快照来自数据库而不是盲信 JWT 或 Redis 中的可变字段。快照只进入进程内短 TTL
+ * 缓存，Redis 仅传递跨实例失效信号，不能注入权限对象。</p>
  */
 @Service
 public class AuthenticationSnapshotService {
@@ -40,7 +40,7 @@ public class AuthenticationSnapshotService {
     @Cacheable(
             value = CacheNames.AUTH_CONTEXT,
             key = "T(com.enjoy.agent.shared.config.CacheKeys).authenticationContext(#tenantId, #userId)",
-            condition = "@cacheProperties.isAuthContextEnabled()",
+            condition = "@cacheProperties.isAuthContextEnabled() && @cacheProperties.isAuthContextLocalEnabled()",
             sync = true
     )
     @Transactional(readOnly = true)
@@ -53,7 +53,7 @@ public class AuthenticationSnapshotService {
     }
 
     /**
-     * 成员、用户或租户安全属性变更后调用。两级缓存会将真实失效延迟到事务提交。
+     * 成员、用户或租户安全属性变更后调用。本地缓存会将真实失效延迟到事务提交。
      */
     @CacheEvict(
             value = CacheNames.AUTH_CONTEXT,

@@ -1,8 +1,12 @@
 package com.enjoy.agent.mcp.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.enjoy.agent.shared.security.OutboundUrlPolicy;
+import com.enjoy.agent.shared.security.OutboundUrlProperties;
+import com.enjoy.agent.shared.exception.ApiException;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -42,15 +46,17 @@ class McpOAuthDiscoveryServiceTest {
                 200,
                 """
                         {
+                          "issuer": "%s/auth",
                           "authorization_endpoint": "%s/auth/authorize",
                           "token_endpoint": "%s/auth/token",
                           "code_challenge_methods_supported": ["S256"]
                         }
-                        """.formatted(baseUrl, baseUrl)
+                        """.formatted(baseUrl, baseUrl, baseUrl)
         ));
         server.start();
 
-        McpOAuthDiscoveryService service = new McpOAuthDiscoveryService(new ObjectMapper());
+        McpOAuthDiscoveryService service = new McpOAuthDiscoveryService(
+                new ObjectMapper(), runtimeProperties(), allowPrivateOutboundPolicy(), new McpOAuthProperties());
         McpOAuthDiscoveryResult result = service.discover(baseUrl + "/mcp");
 
         assertThat(result.resourceMetadataUrl()).isEqualTo(baseUrl + "/.well-known/oauth-protected-resource/mcp");
@@ -85,14 +91,16 @@ class McpOAuthDiscoveryServiceTest {
                 200,
                 """
                         {
+                          "issuer": "%s/issuer",
                           "authorization_endpoint": "%s/issuer/authorize",
                           "token_endpoint": "%s/issuer/token"
                         }
-                        """.formatted(baseUrl, baseUrl)
+                        """.formatted(baseUrl, baseUrl, baseUrl)
         ));
         server.start();
 
-        McpOAuthDiscoveryService service = new McpOAuthDiscoveryService(new ObjectMapper());
+        McpOAuthDiscoveryService service = new McpOAuthDiscoveryService(
+                new ObjectMapper(), runtimeProperties(), allowPrivateOutboundPolicy(), new McpOAuthProperties());
         McpOAuthDiscoveryResult result = service.discover(baseUrl + "/mcp");
 
         assertThat(result.resourceMetadataUrl()).isEqualTo(baseUrl + "/metadata/protected");
@@ -103,6 +111,49 @@ class McpOAuthDiscoveryServiceTest {
         assertThat(result.pkceS256Supported()).isTrue();
     }
 
+    @Test
+    void discover_rejectsAuthorizationMetadataWhoseIssuerDoesNotMatchExpectedIssuer() throws Exception {
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
+        server.createContext("/.well-known/oauth-protected-resource/mcp", exchange -> json(
+                exchange, 200, """
+                        {"resource":"%s/mcp","authorization_servers":["%s/auth"]}
+                        """.formatted(baseUrl, baseUrl)));
+        server.createContext("/.well-known/oauth-authorization-server/auth", exchange -> json(
+                exchange, 200, """
+                        {
+                          "issuer":"%s/attacker",
+                          "authorization_endpoint":"%s/auth/authorize",
+                          "token_endpoint":"%s/auth/token"
+                        }
+                        """.formatted(baseUrl, baseUrl, baseUrl)));
+        server.start();
+
+        McpOAuthDiscoveryService service = new McpOAuthDiscoveryService(
+                new ObjectMapper(), runtimeProperties(), allowPrivateOutboundPolicy(), new McpOAuthProperties());
+
+        assertThatThrownBy(() -> service.discover(baseUrl + "/mcp"))
+                .isInstanceOfSatisfying(ApiException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo("MCP_OAUTH_ISSUER_MISMATCH"));
+    }
+
+    @Test
+    void discover_rejectsOversizedMetadataBeforeJsonAggregation() throws Exception {
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
+        server.createContext("/.well-known/oauth-protected-resource/mcp", exchange ->
+                json(exchange, 200, "x".repeat(2_000)));
+        server.start();
+        McpOAuthProperties oauthProperties = new McpOAuthProperties();
+        oauthProperties.setMaxMetadataResponseBytes(128);
+        McpOAuthDiscoveryService service = new McpOAuthDiscoveryService(
+                new ObjectMapper(), runtimeProperties(), allowPrivateOutboundPolicy(), oauthProperties);
+
+        assertThatThrownBy(() -> service.discover(baseUrl + "/mcp"))
+                .isInstanceOfSatisfying(ApiException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo("MCP_OAUTH_DISCOVERY_FAILED"));
+    }
+
     private void json(HttpExchange exchange, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -110,5 +161,19 @@ class McpOAuthDiscoveryServiceTest {
         try (OutputStream outputStream = exchange.getResponseBody()) {
             outputStream.write(bytes);
         }
+    }
+
+    private McpRuntimeProperties runtimeProperties() {
+        McpRuntimeProperties properties = new McpRuntimeProperties();
+        properties.setHttpConnectTimeoutSeconds(2);
+        properties.setHttpReadTimeoutSeconds(2);
+        return properties;
+    }
+
+    private OutboundUrlPolicy allowPrivateOutboundPolicy() {
+        OutboundUrlProperties properties = new OutboundUrlProperties();
+        properties.setAllowPrivateAddresses(true);
+        properties.setAllowPlainHttp(true);
+        return new OutboundUrlPolicy(properties);
     }
 }

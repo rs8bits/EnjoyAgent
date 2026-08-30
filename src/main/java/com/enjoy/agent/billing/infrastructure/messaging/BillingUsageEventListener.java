@@ -19,11 +19,19 @@ public class BillingUsageEventListener {
 
     @RabbitListener(queues = "${enjoy.billing.rabbit.usage-queue:billing.usage.queue}")
     public void onUsageEvent(String payload) {
-        Long eventId = Long.valueOf(payload.trim());
+        final Long eventId;
+        try {
+            eventId = Long.valueOf(payload == null ? "" : payload.trim());
+        } catch (RuntimeException ex) {
+            // A poison message can never succeed on redelivery; route it to the configured DLQ.
+            throw new AmqpRejectAndDontRequeueException("Invalid billing usage event payload", ex);
+        }
         try {
             billingUsageApplicationService.processUsageEvent(eventId);
         } catch (RuntimeException ex) {
-            billingUsageApplicationService.markUsageEventFailed(eventId, ex);
+            if (billingUsageApplicationService.scheduleUsageEventRetry(eventId, ex)) {
+                return;
+            }
             throw new AmqpRejectAndDontRequeueException("Billing usage event processing failed", ex);
         }
     }

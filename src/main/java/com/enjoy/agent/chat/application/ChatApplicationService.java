@@ -6,7 +6,6 @@ import com.enjoy.agent.agent.infrastructure.persistence.AgentRepository;
 import com.enjoy.agent.auth.domain.entity.AppUser;
 import com.enjoy.agent.auth.infrastructure.persistence.AppUserRepository;
 import com.enjoy.agent.billing.application.BillingUsageApplicationService;
-import com.enjoy.agent.billing.infrastructure.persistence.BillingUsageEventRepository;
 import com.enjoy.agent.chat.api.request.CreateChatSessionRequest;
 import com.enjoy.agent.chat.api.request.SendChatMessageRequest;
 import com.enjoy.agent.chat.api.response.ChatMessageResponse;
@@ -22,6 +21,7 @@ import com.enjoy.agent.chat.domain.enums.ChatMessageRole;
 import com.enjoy.agent.chat.infrastructure.persistence.ChatMessageRepository;
 import com.enjoy.agent.chat.infrastructure.persistence.ChatSessionMemoryRepository;
 import com.enjoy.agent.chat.infrastructure.persistence.ChatSessionRepository;
+import com.enjoy.agent.chat.infrastructure.persistence.ChatTurnRequestRepository;
 import com.enjoy.agent.knowledge.application.KnowledgeBaseApplicationService;
 import com.enjoy.agent.knowledge.application.KnowledgeRetrievalDebug;
 import com.enjoy.agent.knowledge.application.KnowledgeRetrievalHit;
@@ -51,6 +51,8 @@ import com.enjoy.agent.shared.exception.ApiError;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.shared.security.CurrentUserContext;
 import com.enjoy.agent.tenant.domain.entity.Tenant;
+import com.enjoy.agent.auth.domain.enums.SystemRole;
+import com.enjoy.agent.tenant.domain.enums.TenantMemberRole;
 import com.enjoy.agent.tenant.domain.enums.TenantStatus;
 import com.enjoy.agent.tenant.infrastructure.persistence.TenantRepository;
 import java.io.IOException;
@@ -65,12 +67,17 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.security.concurrent.DelegatingSecurityContextRunnable;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 /**
  * 聊天运行时应用服务。
  */
 @Service
 public class ChatApplicationService {
+
+    private static final long CHAT_STREAM_TIMEOUT_MS = 300_000L;
 
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
@@ -89,10 +96,12 @@ public class ChatApplicationService {
     private final ModelCallLogRepository modelCallLogRepository;
     private final McpToolCallLogRepository mcpToolCallLogRepository;
     private final BillingUsageApplicationService billingUsageApplicationService;
-    private final BillingUsageEventRepository billingUsageEventRepository;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
     private final WorkflowOrchestratorService workflowOrchestratorService;
+    private final ChatTurnIdempotencyService chatTurnIdempotencyService;
+    private final ChatSessionDeletionPolicy chatSessionDeletionPolicy;
+    private final ChatTurnRequestRepository chatTurnRequestRepository;
 
     public ChatApplicationService(
             ChatSessionRepository chatSessionRepository,
@@ -112,10 +121,12 @@ public class ChatApplicationService {
             ModelCallLogRepository modelCallLogRepository,
             McpToolCallLogRepository mcpToolCallLogRepository,
             BillingUsageApplicationService billingUsageApplicationService,
-            BillingUsageEventRepository billingUsageEventRepository,
             TransactionTemplate transactionTemplate,
             Clock clock,
-            WorkflowOrchestratorService workflowOrchestratorService
+            WorkflowOrchestratorService workflowOrchestratorService,
+            ChatTurnIdempotencyService chatTurnIdempotencyService,
+            ChatSessionDeletionPolicy chatSessionDeletionPolicy,
+            ChatTurnRequestRepository chatTurnRequestRepository
     ) {
         this.chatSessionRepository = chatSessionRepository;
         this.chatMessageRepository = chatMessageRepository;
@@ -134,10 +145,12 @@ public class ChatApplicationService {
         this.modelCallLogRepository = modelCallLogRepository;
         this.mcpToolCallLogRepository = mcpToolCallLogRepository;
         this.billingUsageApplicationService = billingUsageApplicationService;
-        this.billingUsageEventRepository = billingUsageEventRepository;
         this.transactionTemplate = transactionTemplate;
         this.clock = clock;
         this.workflowOrchestratorService = workflowOrchestratorService;
+        this.chatTurnIdempotencyService = chatTurnIdempotencyService;
+        this.chatSessionDeletionPolicy = chatSessionDeletionPolicy;
+        this.chatTurnRequestRepository = chatTurnRequestRepository;
     }
 
     /**
@@ -170,11 +183,20 @@ public class ChatApplicationService {
      */
     public Page<ChatSessionResponse> listSessions(Long agentId, Pageable pageable) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
+        boolean tenantWide = currentUser.role() == TenantMemberRole.OWNER
+                || currentUser.systemRole() == SystemRole.ADMIN;
         if (agentId == null) {
-            return chatSessionRepository.findAllByTenant_Id(currentUser.tenantId(), pageable)
+            return (tenantWide
+                    ? chatSessionRepository.findAllByTenant_Id(currentUser.tenantId(), pageable)
+                    : chatSessionRepository.findAllByTenant_IdAndCreatedBy_Id(
+                            currentUser.tenantId(), currentUser.userId(), pageable))
                     .map(this::toSessionResponse);
         }
-        return chatSessionRepository.findAllByTenant_IdAndAgent_Id(currentUser.tenantId(), agentId, pageable)
+        return (tenantWide
+                ? chatSessionRepository.findAllByTenant_IdAndAgent_Id(
+                        currentUser.tenantId(), agentId, pageable)
+                : chatSessionRepository.findAllByTenant_IdAndAgent_IdAndCreatedBy_Id(
+                        currentUser.tenantId(), agentId, currentUser.userId(), pageable))
                 .map(this::toSessionResponse);
     }
 
@@ -190,10 +212,19 @@ public class ChatApplicationService {
      */
     public void deleteSession(Long sessionId) {
         transactionTemplate.executeWithoutResult(status -> {
+            AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
             ChatSession session = requireTenantOwnedSession(sessionId);
+            chatSessionDeletionPolicy.requireAllowed(currentUser, session);
             Long targetSessionId = session.getId();
 
-            billingUsageEventRepository.deleteAllBySessionId(targetSessionId);
+            if (chatTurnRequestRepository.existsBySessionIdAndStatus(targetSessionId, "RUNNING")) {
+                throw new ApiException(
+                        "CHAT_SESSION_BUSY",
+                        "A running chat turn must finish or be cancelled before the session can be deleted",
+                        HttpStatus.CONFLICT
+                );
+            }
+
             mcpToolCallLogRepository.deleteAllBySessionId(targetSessionId);
             chatSessionMemoryRepository.deleteAllBySession_Id(targetSessionId);
             modelCallLogRepository.deleteAllBySessionId(targetSessionId);
@@ -216,31 +247,104 @@ public class ChatApplicationService {
      * 发送一条用户消息，并同步得到模型回复。
      */
     public ChatTurnResponse sendMessage(Long sessionId, SendChatMessageRequest request) {
-        PreparedChatTurn enrichedChatTurn = prepareEnrichedChatTurn(sessionId, request.content());
-        return completePreparedChatTurn(enrichedChatTurn);
+        return sendMessage(sessionId, request, null);
+    }
+
+    public ChatTurnResponse sendMessage(
+            Long sessionId,
+            SendChatMessageRequest request,
+            String idempotencyKey
+    ) {
+        AuthenticatedUser user = CurrentUserContext.requireCurrentUser();
+        requireTenantOwnedSession(sessionId);
+        ChatTurnIdempotencyService.TurnClaim claim = chatTurnIdempotencyService.begin(
+                user.tenantId(), user.userId(), sessionId, idempotencyKey, request);
+        if (claim.replayed()) {
+            return claim.cachedResponse();
+        }
+        try {
+            PreparedChatTurn enrichedChatTurn = prepareEnrichedChatTurn(
+                    sessionId, request.content(), request.toolApprovalTokens(),
+                    claim.handle(), claim.userMessageId());
+            ChatTurnResponse response = completePreparedChatTurn(enrichedChatTurn, claim.handle());
+            return response;
+        } catch (RuntimeException ex) {
+            chatTurnIdempotencyService.fail(claim.handle());
+            throw ex;
+        }
     }
 
     /**
      * 发送一条用户消息，并以 SSE 流式返回模型输出。
      */
     public SseEmitter streamMessage(Long sessionId, SendChatMessageRequest request) {
-        PreparedChatTurn enrichedChatTurn = prepareEnrichedChatTurn(sessionId, request.content());
-        boolean hasMcpTools = hasMcpTools(enrichedChatTurn);
-        SseEmitter emitter = new SseEmitter(0L);
+        return streamMessage(sessionId, request, null);
+    }
 
-        Thread.ofVirtual()
+    public SseEmitter streamMessage(
+            Long sessionId,
+            SendChatMessageRequest request,
+            String idempotencyKey
+    ) {
+        AuthenticatedUser user = CurrentUserContext.requireCurrentUser();
+        requireTenantOwnedSession(sessionId);
+        ChatTurnIdempotencyService.TurnClaim claim = chatTurnIdempotencyService.begin(
+                user.tenantId(), user.userId(), sessionId, idempotencyKey, request);
+        if (claim.replayed()) {
+            return replayCompletedTurn(claim.cachedResponse());
+        }
+        final PreparedChatTurn enrichedChatTurn;
+        try {
+            enrichedChatTurn = prepareEnrichedChatTurn(
+                    sessionId, request.content(), request.toolApprovalTokens(),
+                    claim.handle(), claim.userMessageId());
+        } catch (RuntimeException ex) {
+            chatTurnIdempotencyService.fail(claim.handle());
+            throw ex;
+        }
+        boolean hasMcpTools = hasMcpTools(enrichedChatTurn);
+        boolean isWorkflow = enrichedChatTurn.workflowId() != null;
+        SseEmitter emitter = new SseEmitter(CHAT_STREAM_TIMEOUT_MS);
+
+        SecurityContext streamSecurityContext = SecurityContextHolder.createEmptyContext();
+        streamSecurityContext.setAuthentication(SecurityContextHolder.getContext().getAuthentication());
+        Runnable streamTask = () -> executeStreamingTurn(
+                emitter, enrichedChatTurn, hasMcpTools, isWorkflow, claim.handle());
+        Thread streamThread = Thread.ofVirtual()
                 .name("chat-stream-" + enrichedChatTurn.sessionId())
-                .start(() -> executeStreamingTurn(emitter, enrichedChatTurn, hasMcpTools));
+                .unstarted(new DelegatingSecurityContextRunnable(streamTask, streamSecurityContext));
+        emitter.onTimeout(streamThread::interrupt);
+        emitter.onError(ignored -> streamThread.interrupt());
+        emitter.onCompletion(streamThread::interrupt);
+        streamThread.start();
 
         return emitter;
     }
 
-    private PreparedChatTurn prepareEnrichedChatTurn(Long sessionId, String content) {
-        PreparedChatTurn preparedChatTurn = requireTransactionResult(transactionTemplate.execute(status ->
-                prepareChatTurn(sessionId, content)
-        ));
-        billingUsageApplicationService.assertUserCanUseOfficialModel(preparedChatTurn.userId(), preparedChatTurn.modelConfig());
+    private SseEmitter replayCompletedTurn(ChatTurnResponse cachedResponse) {
+        SseEmitter emitter = new SseEmitter(CHAT_STREAM_TIMEOUT_MS);
+        Thread.ofVirtual().name("chat-stream-replay-" + cachedResponse.sessionId()).start(() -> {
+            try {
+                sendEvent(emitter, "completed", cachedResponse);
+                emitter.complete();
+            } catch (IOException ex) {
+                emitter.completeWithError(ex);
+            }
+        });
+        return emitter;
+    }
 
+    private PreparedChatTurn prepareEnrichedChatTurn(
+            Long sessionId,
+            String content,
+            List<String> toolApprovalTokens,
+            ChatTurnIdempotencyService.TurnHandle turnHandle,
+            Long existingUserMessageId
+    ) {
+        PreparedChatTurn preparedChatTurn = requireTransactionResult(transactionTemplate.execute(status ->
+                prepareChatTurn(
+                        sessionId, content, toolApprovalTokens, turnHandle, existingUserMessageId)
+        ));
         try {
             return enrichKnowledgeContext(preparedChatTurn);
         } catch (RuntimeException ex) {
@@ -252,21 +356,41 @@ public class ChatApplicationService {
         }
     }
 
-    private ChatTurnResponse completePreparedChatTurn(PreparedChatTurn enrichedChatTurn) {
+    private ChatTurnResponse completePreparedChatTurn(
+            PreparedChatTurn enrichedChatTurn,
+            ChatTurnIdempotencyService.TurnHandle turnHandle
+    ) {
         try {
             boolean hasMcpTools = hasMcpTools(enrichedChatTurn);
             boolean isWorkflow = enrichedChatTurn.workflowId() != null;
+            boolean plainModelCall = !hasMcpTools && !isWorkflow;
+            Long reservationId = plainModelCall
+                    ? billingUsageApplicationService.beginOfficialModelCall(
+                            enrichedChatTurn.userId(),
+                            enrichedChatTurn.modelConfig(),
+                            modelGatewayService.estimateInputTokenUpperBound(enrichedChatTurn))
+                    : null;
+            boolean completed = false;
             ModelGatewayResult result;
-            if (isWorkflow) {
-                result = workflowOrchestratorService.executeWorkflow(enrichedChatTurn);
-            } else if (hasMcpTools) {
-                result = mcpChatOrchestratorService.completeTurn(enrichedChatTurn);
-            } else {
-                result = modelGatewayService.generateReply(enrichedChatTurn);
+            try {
+                if (isWorkflow) {
+                    result = workflowOrchestratorService.executeWorkflow(enrichedChatTurn);
+                } else if (hasMcpTools) {
+                    result = mcpChatOrchestratorService.completeTurn(enrichedChatTurn);
+                } else {
+                    result = modelGatewayService.generateReply(enrichedChatTurn);
+                }
+                ChatTurnResponse response = persistAssistantReplyTransactional(
+                        enrichedChatTurn, result, plainModelCall, reservationId, turnHandle);
+                completed = true;
+                scheduleSessionMemoryRefresh(enrichedChatTurn);
+                return response;
+            } finally {
+                if (plainModelCall && !completed) {
+                    billingUsageApplicationService.releaseOfficialModelCall(
+                            enrichedChatTurn.userId(), reservationId);
+                }
             }
-            ChatTurnResponse response = persistAssistantReplyTransactional(enrichedChatTurn, result, !hasMcpTools && !isWorkflow);
-            scheduleSessionMemoryRefresh(enrichedChatTurn);
-            return response;
         } catch (ModelGatewayInvocationException ex) {
             throw recordModelFailureAndConvert(enrichedChatTurn, ex);
         }
@@ -275,7 +399,13 @@ public class ChatApplicationService {
     /**
      * 在事务内保存用户消息，并构造本次调用模型所需的上下文快照。
      */
-    private PreparedChatTurn prepareChatTurn(Long sessionId, String content) {
+    private PreparedChatTurn prepareChatTurn(
+            Long sessionId,
+            String content,
+            List<String> toolApprovalTokens,
+            ChatTurnIdempotencyService.TurnHandle turnHandle,
+            Long existingUserMessageId
+    ) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
         ChatSession session = requireTenantOwnedSession(sessionId);
         Agent agent = requireRunnableAgent(currentUser.tenantId(), session.getAgent().getId());
@@ -284,12 +414,25 @@ public class ChatApplicationService {
         List<PreparedMcpTool> mcpTools = mcpRuntimeService.listRunnableToolsForAgent(agent.getId());
         String normalizedContent = normalizeContent(content);
 
-        ChatMessage userMessage = new ChatMessage();
-        userMessage.setTenant(session.getTenant());
-        userMessage.setSession(session);
-        userMessage.setRole(ChatMessageRole.USER);
-        userMessage.setContent(normalizedContent);
-        ChatMessage savedUserMessage = chatMessageRepository.saveAndFlush(userMessage);
+        ChatMessage savedUserMessage;
+        if (existingUserMessageId == null) {
+            ChatMessage userMessage = new ChatMessage();
+            userMessage.setTenant(session.getTenant());
+            userMessage.setSession(session);
+            userMessage.setRole(ChatMessageRole.USER);
+            userMessage.setContent(normalizedContent);
+            savedUserMessage = chatMessageRepository.saveAndFlush(userMessage);
+            chatTurnIdempotencyService.attachUserMessage(turnHandle, savedUserMessage.getId());
+        } else {
+            savedUserMessage = chatMessageRepository.findById(existingUserMessageId)
+                    .filter(message -> Objects.equals(message.getSession().getId(), session.getId())
+                            && message.getRole() == ChatMessageRole.USER
+                            && Objects.equals(message.getContent(), normalizedContent))
+                    .orElseThrow(() -> new ApiException(
+                            "CHAT_TURN_USER_MESSAGE_INVALID",
+                            "Stored idempotent user message no longer matches this request",
+                            HttpStatus.CONFLICT));
+        }
 
         touchSession(session);
 
@@ -310,7 +453,8 @@ public class ChatApplicationService {
                 null,
                 null,
                 slidingWindowContextBuilder.buildWindow(session.getId(), agent.getContextWindowSize()),
-                workflowId
+                workflowId,
+                toolApprovalTokens
         );
     }
 
@@ -345,27 +489,31 @@ public class ChatApplicationService {
                 retrievalResult.retrievalContext(),
                 retrievalResult.debug(),
                 preparedChatTurn.historyMessages(),
-                preparedChatTurn.workflowId()
+                preparedChatTurn.workflowId(),
+                preparedChatTurn.mcpToolApprovalTokens()
         );
     }
 
     private void executeStreamingTurn(
             SseEmitter emitter,
             PreparedChatTurn enrichedChatTurn,
-            boolean hasMcpTools
+            boolean hasMcpTools,
+            boolean isWorkflow,
+            ChatTurnIdempotencyService.TurnHandle turnHandle
     ) {
         try {
-            sendStartedEvent(emitter, enrichedChatTurn, hasMcpTools);
+            sendStartedEvent(emitter, enrichedChatTurn, hasMcpTools || isWorkflow);
         } catch (IOException ignored) {
+            chatTurnIdempotencyService.fail(turnHandle);
             emitter.complete();
             return;
         }
         sendRetrievalEventQuietly(emitter, enrichedChatTurn.retrievalDebug());
 
         try {
-            ChatTurnResponse response = hasMcpTools
-                    ? completePreparedChatTurn(enrichedChatTurn)
-                    : streamPlainPreparedChatTurn(enrichedChatTurn, emitter);
+            ChatTurnResponse response = hasMcpTools || isWorkflow
+                    ? completePreparedChatTurn(enrichedChatTurn, turnHandle)
+                    : streamPlainPreparedChatTurn(enrichedChatTurn, emitter, turnHandle);
             try {
                 sendEvent(emitter, "completed", response);
             } catch (IOException ignored) {
@@ -374,29 +522,48 @@ public class ChatApplicationService {
             }
             emitter.complete();
         } catch (ModelGatewayStreamConsumerException ignored) {
+            chatTurnIdempotencyService.fail(turnHandle);
             emitter.complete();
         } catch (ApiException ex) {
+            chatTurnIdempotencyService.fail(turnHandle);
             sendErrorEventQuietly(emitter, ex.getCode(), ex.getMessage());
             emitter.complete();
         } catch (RuntimeException ex) {
+            chatTurnIdempotencyService.fail(turnHandle);
             sendErrorEventQuietly(emitter, "INTERNAL_SERVER_ERROR", "Unexpected server error");
             emitter.complete();
         }
     }
 
-    private ChatTurnResponse streamPlainPreparedChatTurn(PreparedChatTurn enrichedChatTurn, SseEmitter emitter) {
+    private ChatTurnResponse streamPlainPreparedChatTurn(
+            PreparedChatTurn enrichedChatTurn,
+            SseEmitter emitter,
+            ChatTurnIdempotencyService.TurnHandle turnHandle
+    ) {
+        Long reservationId = billingUsageApplicationService.beginOfficialModelCall(
+                enrichedChatTurn.userId(),
+                enrichedChatTurn.modelConfig(),
+                modelGatewayService.estimateInputTokenUpperBound(enrichedChatTurn));
+        boolean completed = false;
         try {
             ModelGatewayResult result = modelGatewayService.streamReply(
                     enrichedChatTurn,
                     delta -> sendDeltaEvent(emitter, delta)
             );
-            ChatTurnResponse response = persistAssistantReplyTransactional(enrichedChatTurn, result, true);
+            ChatTurnResponse response = persistAssistantReplyTransactional(
+                    enrichedChatTurn, result, true, reservationId, turnHandle);
+            completed = true;
             scheduleSessionMemoryRefresh(enrichedChatTurn);
             return response;
         } catch (ModelGatewayStreamConsumerException ex) {
             throw ex;
         } catch (ModelGatewayInvocationException ex) {
             throw recordModelFailureAndConvert(enrichedChatTurn, ex);
+        } finally {
+            if (!completed) {
+                billingUsageApplicationService.releaseOfficialModelCall(
+                        enrichedChatTurn.userId(), reservationId);
+            }
         }
     }
 
@@ -406,7 +573,9 @@ public class ChatApplicationService {
     private ChatTurnResponse persistAssistantReply(
             PreparedChatTurn preparedChatTurn,
             ModelGatewayResult result,
-            boolean recordModelLog
+            boolean recordModelLog,
+            Long reservationId,
+            ChatTurnIdempotencyService.TurnHandle turnHandle
     ) {
         ChatSession session = chatSessionRepository.findById(preparedChatTurn.sessionId())
                 .orElseThrow(() -> new ApiException("CHAT_SESSION_NOT_FOUND", "Chat session not found", HttpStatus.NOT_FOUND));
@@ -428,7 +597,8 @@ public class ChatApplicationService {
             billingUsageApplicationService.recordUsageEventIfNeeded(
                     preparedChatTurn,
                     result,
-                    savedModelCallLog.getId()
+                    savedModelCallLog.getId(),
+                    reservationId
             );
         }
 
@@ -438,7 +608,7 @@ public class ChatApplicationService {
             throw new ApiException("CHAT_MESSAGE_NOT_FOUND", "User message not found", HttpStatus.INTERNAL_SERVER_ERROR);
         }
 
-        return new ChatTurnResponse(
+        ChatTurnResponse response = new ChatTurnResponse(
                 session.getId(),
                 toMessageResponse(userMessage),
                 toMessageResponse(savedAssistantMessage),
@@ -452,15 +622,20 @@ public class ChatApplicationService {
                 result.totalTokens(),
                 toRetrievalDebugResponse(preparedChatTurn.retrievalDebug())
         );
+        chatTurnIdempotencyService.complete(turnHandle, response);
+        return response;
     }
 
     private ChatTurnResponse persistAssistantReplyTransactional(
             PreparedChatTurn preparedChatTurn,
             ModelGatewayResult result,
-            boolean recordModelLog
+            boolean recordModelLog,
+            Long reservationId,
+            ChatTurnIdempotencyService.TurnHandle turnHandle
     ) {
         return requireTransactionResult(transactionTemplate.execute(status ->
-                persistAssistantReply(preparedChatTurn, result, recordModelLog)
+                persistAssistantReply(
+                        preparedChatTurn, result, recordModelLog, reservationId, turnHandle)
         ));
     }
 
@@ -469,8 +644,18 @@ public class ChatApplicationService {
      */
     private ChatSession requireTenantOwnedSession(Long sessionId) {
         AuthenticatedUser currentUser = CurrentUserContext.requireCurrentUser();
-        return chatSessionRepository.findByIdAndTenant_Id(sessionId, currentUser.tenantId())
-                .orElseThrow(() -> new ApiException("CHAT_SESSION_NOT_FOUND", "Chat session not found", HttpStatus.NOT_FOUND));
+        ChatSession session = chatSessionRepository.findByIdAndTenant_Id(sessionId, currentUser.tenantId())
+                .orElseThrow(() -> new ApiException(
+                        "CHAT_SESSION_NOT_FOUND", "Chat session not found", HttpStatus.NOT_FOUND));
+        boolean creator = session.getCreatedBy() != null
+                && Objects.equals(session.getCreatedBy().getId(), currentUser.userId());
+        boolean tenantWide = currentUser.role() == TenantMemberRole.OWNER
+                || currentUser.systemRole() == SystemRole.ADMIN;
+        if (!creator && !tenantWide) {
+            // Return 404 so a member cannot use the authorization boundary as a session-id oracle.
+            throw new ApiException("CHAT_SESSION_NOT_FOUND", "Chat session not found", HttpStatus.NOT_FOUND);
+        }
+        return session;
     }
 
     /**
@@ -582,12 +767,7 @@ public class ChatApplicationService {
         }
         Thread.ofVirtual()
                 .name("chat-memory-" + preparedChatTurn.sessionId())
-                .start(() -> chatSessionMemoryService.refreshSummaryIfNeeded(
-                        preparedChatTurn.tenantId(),
-                        preparedChatTurn.sessionId(),
-                        preparedChatTurn.sessionMemory(),
-                        preparedChatTurn.modelConfig()
-                ));
+                .start(() -> chatSessionMemoryService.refreshSummaryIfNeeded(preparedChatTurn));
     }
 
     /**

@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -40,6 +42,7 @@ public class AgentController {
      */
     @Operation(summary = "创建 Agent", description = "在当前租户下创建一个可绑定模型配置的 Agent")
     @PostMapping
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<AgentResponse> createAgent(@Valid @RequestBody CreateAgentRequest request) {
         return ApiResponse.success(agentApplicationService.createAgent(request), "Agent created");
     }
@@ -49,8 +52,11 @@ public class AgentController {
      */
     @Operation(summary = "Agent 列表", description = "分页查询当前租户下的 Agent")
     @GetMapping
-    public ApiResponse<PagedResponse<AgentResponse>> listAgents(Pageable pageable) {
-        return ApiResponse.success(PagedResponse.of(agentApplicationService.listAgents(pageable)));
+    public ApiResponse<PagedResponse<AgentResponse>> listAgents(
+            Pageable pageable,
+            @RequestParam(required = false) String search
+    ) {
+        return ApiResponse.success(PagedResponse.of(agentApplicationService.listAgents(pageable, search)));
     }
 
     /**
@@ -67,6 +73,7 @@ public class AgentController {
      */
     @Operation(summary = "更新 Agent", description = "更新当前租户下的 Agent 基础配置")
     @PutMapping("/{id}")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<AgentResponse> updateAgent(
             @PathVariable Long id,
             @Valid @RequestBody UpdateAgentRequest request
@@ -79,6 +86,7 @@ public class AgentController {
      */
     @Operation(summary = "删除 Agent", description = "删除当前租户下的 Agent")
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<Void> deleteAgent(@PathVariable Long id) {
         agentApplicationService.deleteAgent(id);
         return ApiResponse.success(null, "Agent deleted");

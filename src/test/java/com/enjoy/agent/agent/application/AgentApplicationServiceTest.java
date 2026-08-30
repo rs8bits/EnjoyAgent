@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.enjoy.agent.agent.api.request.CreateAgentRequest;
+import com.enjoy.agent.agent.api.request.UpdateAgentRequest;
 import com.enjoy.agent.agent.domain.entity.Agent;
 import com.enjoy.agent.agent.domain.enums.AgentChatModelBindingType;
 import com.enjoy.agent.agent.domain.enums.ContextStrategy;
@@ -23,12 +24,13 @@ import com.enjoy.agent.model.domain.enums.ModelType;
 import com.enjoy.agent.model.infrastructure.persistence.ModelConfigRepository;
 import com.enjoy.agent.model.infrastructure.persistence.OfficialModelConfigRepository;
 import com.enjoy.agent.shared.exception.ApiException;
-import com.enjoy.agent.workflow.infrastructure.persistence.WorkflowRepository;
 import com.enjoy.agent.shared.security.AuthenticatedUser;
 import com.enjoy.agent.tenant.domain.entity.Tenant;
 import com.enjoy.agent.tenant.domain.enums.TenantMemberRole;
 import com.enjoy.agent.tenant.domain.enums.TenantStatus;
 import com.enjoy.agent.tenant.infrastructure.persistence.TenantRepository;
+import com.enjoy.agent.workflow.domain.entity.Workflow;
+import com.enjoy.agent.workflow.infrastructure.persistence.WorkflowRepository;
 import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,6 +39,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -95,6 +99,18 @@ class AgentApplicationServiceTest {
     @AfterEach
     void tearDown() {
         SecurityContextHolder.clearContext();
+    }
+
+    @Test
+    void listAgents_shouldSearchWithinTenantWithoutLoadingEveryPage() {
+        var pageable = PageRequest.of(3, 20);
+        when(agentRepository.findAllByTenant_IdAndNameContainingIgnoreCase(7L, "知识助手", pageable))
+                .thenReturn(Page.empty(pageable));
+
+        var result = agentApplicationService.listAgents(pageable, "  知识助手  ");
+
+        assertThat(result).isEmpty();
+        verify(agentRepository).findAllByTenant_IdAndNameContainingIgnoreCase(7L, "知识助手", pageable);
     }
 
     @Test
@@ -204,6 +220,45 @@ class AgentApplicationServiceTest {
         assertThat(response.memoryUpdateMessageThreshold()).isEqualTo(6);
     }
 
+    @Test
+    void updateAgent_shouldReturnTheSelectedWorkflowBinding() {
+        Agent existing = configuredAgent(901L);
+        Workflow workflow = new Workflow();
+        workflow.setId(501L);
+        workflow.setTenant(activeTenant());
+        workflow.setName("售后编排");
+        workflow.setEnabled(true);
+
+        when(agentRepository.findByIdAndTenant_Id(901L, 7L)).thenReturn(Optional.of(existing));
+        when(agentRepository.existsByTenant_IdAndNameAndIdNot(7L, "工作流助手", 901L)).thenReturn(false);
+        when(modelConfigRepository.findByIdAndTenant_Id(101L, 7L)).thenReturn(Optional.of(chatModel(101L)));
+        when(workflowRepository.findByIdAndTenant_Id(501L, 7L)).thenReturn(Optional.of(workflow));
+        when(agentRepository.saveAndFlush(any(Agent.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = agentApplicationService.updateAgent(901L, new UpdateAgentRequest(
+                "工作流助手",
+                "desc",
+                "prompt",
+                AgentChatModelBindingType.USER_MODEL,
+                101L,
+                null,
+                null,
+                false,
+                null,
+                ContextStrategy.SLIDING_WINDOW,
+                12,
+                false,
+                null,
+                null,
+                true,
+                501L
+        ));
+
+        assertThat(existing.getWorkflow()).isSameAs(workflow);
+        assertThat(response.workflowId()).isEqualTo(501L);
+        assertThat(response.workflowName()).isEqualTo("售后编排");
+    }
+
     private Tenant activeTenant() {
         Tenant tenant = new Tenant();
         tenant.setId(7L);
@@ -211,6 +266,22 @@ class AgentApplicationServiceTest {
         tenant.setName("Tenant 7");
         tenant.setStatus(TenantStatus.ACTIVE);
         return tenant;
+    }
+
+    private Agent configuredAgent(Long id) {
+        Agent agent = new Agent();
+        agent.setId(id);
+        agent.setTenant(activeTenant());
+        agent.setName("旧名称");
+        agent.setDescription("desc");
+        agent.setSystemPrompt("prompt");
+        agent.setChatModelBindingType(AgentChatModelBindingType.USER_MODEL);
+        agent.setContextStrategy(ContextStrategy.SLIDING_WINDOW);
+        agent.setContextWindowSize(12);
+        agent.setMemoryEnabled(false);
+        agent.setMemoryUpdateMessageThreshold(6);
+        agent.setEnabled(true);
+        return agent;
     }
 
     private KnowledgeBase enabledKnowledgeBase() {
