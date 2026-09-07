@@ -5,8 +5,11 @@ import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 /**
  * Agent 仓储接口。
@@ -46,6 +49,37 @@ public interface AgentRepository extends JpaRepository<Agent, Long> {
             "rerankModelConfig.credential"
     })
     Optional<Agent> findByIdAndTenant_Id(Long id, Long tenantId);
+
+    /** 客服专用列表投影：查询列中明确不含 Agent system prompt 和任何凭证。 */
+    @Query("""
+            select new com.enjoy.agent.agent.infrastructure.persistence.AgentSummaryProjection(
+                agent.id, agent.name, agent.description, agent.enabled,
+                knowledgeBase.name, agent.updatedAt
+            )
+            from Agent agent
+            left join agent.knowledgeBase knowledgeBase
+            where agent.tenant.id = :tenantId
+            order by agent.id desc
+            """)
+    Slice<AgentSummaryProjection> findSupportSummariesByTenantId(
+            @Param("tenantId") Long tenantId,
+            Pageable pageable
+    );
+
+    /** 客服专用精确投影；ID 与 tenantId 必须同时匹配。 */
+    @Query("""
+            select new com.enjoy.agent.agent.infrastructure.persistence.AgentSummaryProjection(
+                agent.id, agent.name, agent.description, agent.enabled,
+                knowledgeBase.name, agent.updatedAt
+            )
+            from Agent agent
+            left join agent.knowledgeBase knowledgeBase
+            where agent.id = :id and agent.tenant.id = :tenantId
+            """)
+    Optional<AgentSummaryProjection> findSupportSummaryByIdAndTenantId(
+            @Param("id") Long id,
+            @Param("tenantId") Long tenantId
+    );
 
     /**
      * 判断当前租户下是否已有同名 Agent。

@@ -112,6 +112,22 @@ enjoy:
     max-response-chars: ${APP_MODEL_GATEWAY_MAX_RESPONSE_CHARS:500000}
     max-prompt-chars: ${APP_MODEL_GATEWAY_MAX_PROMPT_CHARS:400000}
     max-prompt-bytes: ${APP_MODEL_GATEWAY_MAX_PROMPT_BYTES:1000000}
+  # 平台 AI 客服拥有独立、严格的小上下文预算。official-model-config-id 必须显式
+  # 指向一个已启用的官方 CHAT 模型，避免不同环境因数据库排序而选到不同模型。
+  support:
+    enabled: ${APP_SUPPORT_ENABLED:true}
+    official-model-config-id: ${APP_SUPPORT_OFFICIAL_MODEL_CONFIG_ID:}
+    max-user-message-chars: ${APP_SUPPORT_MAX_USER_MESSAGE_CHARS:4000}
+    recent-message-limit: ${APP_SUPPORT_RECENT_MESSAGE_LIMIT:12}
+    max-input-token-upper-bound: ${APP_SUPPORT_MAX_INPUT_TOKEN_UPPER_BOUND:16000}
+    max-tool-result-chars: ${APP_SUPPORT_MAX_TOOL_RESULT_CHARS:4000}
+    max-output-tokens: ${APP_SUPPORT_MAX_OUTPUT_TOKENS:2048}
+    max-assistant-chars: ${APP_SUPPORT_MAX_ASSISTANT_CHARS:8000}
+    max-skills-per-turn: ${APP_SUPPORT_MAX_SKILLS_PER_TURN:3}
+    skill-page-size: ${APP_SUPPORT_SKILL_PAGE_SIZE:10}
+    emitter-timeout-ms: ${APP_SUPPORT_EMITTER_TIMEOUT_MS:300000}
+    confirmation-ttl-minutes: ${APP_SUPPORT_CONFIRMATION_TTL_MINUTES:10}
+    project-name: ${APP_SUPPORT_PROJECT_NAME:EnjoyAgent}
   billing:
     enabled: ${APP_BILLING_ENABLED:false}
     currency: ${APP_BILLING_CURRENCY:CNY}

@@ -18,6 +18,7 @@ EnjoyAgent 是一个基于 Spring Boot 的多租户 AI Agent 平台后端。前�
 - 可视化工作流持久化与执行
 - 钱包、额度预留、模型调用计费和可靠异步事件
 - 共享市场、资产安装和管理员审核
+- 用户 + 租户唯一的 AI 客服、LLM 工具规划、轻量摘要记忆、安全确认和调用归档
 
 ## 技术栈
 
@@ -102,8 +103,15 @@ SPRING_PROFILES_ACTIVE=local ./mvnw spring-boot:run
 - `APP_MCP_*`：MCP 运行时、OAuth 和高风险工具审批
 - `APP_BILLING_*`：钱包、额度预留和异步计费
 - `APP_CACHE_*`：本地缓存、Redis 缓存和失效广播
+- `APP_SUPPORT_*`：AI 客服官方模型、最近消息和严格上下文预算
 
 模型供应商密钥由用户或管理员通过 API 写入并加密存储，不应直接提交到仓库。
+
+AI 客服需要把 `APP_SUPPORT_OFFICIAL_MODEL_CONFIG_ID` 显式设置为一个已启用的官方
+`CHAT` 模型配置 ID。客服直接使用平台官方凭证，不伪造普通 Agent，也不会从用户钱包
+扣除客服调用费用。未配置模型时，纯问候与固定项目介绍仍可由规则快速回答。实现演进
+可分别阅读 [`support-phase1.md`](docs/architecture/support-phase1.md) 和
+[`support-phase2.md`](docs/architecture/support-phase2.md)。
 
 ## 生产安全
 
@@ -147,6 +155,7 @@ src/main/java/com/enjoy/agent
 ├── model          模型配置
 ├── modelgateway   模型调用网关
 ├── shared         通用安全、缓存和基础设施
+├── support        唯一 AI 客服会话、Skill、安全 Hook 与审计
 └── workflow       工作流
 ```
 

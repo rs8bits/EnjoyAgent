@@ -15,6 +15,7 @@ import jakarta.persistence.LockModeType;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
 
 class RechargeOrderMappingQueryContractTest {
 
@@ -22,6 +23,19 @@ class RechargeOrderMappingQueryContractTest {
     void everyReadAndReviewQueryShouldFetchMapperAssociationsInBulk() {
         for (Method method : RechargeOrderRepository.class.getDeclaredMethods()) {
             if (!method.getName().startsWith("find")) {
+                continue;
+            }
+            if (method.getName().startsWith("findSupport")) {
+                // 客服方法返回显式构造器投影而不是 RechargeOrder 实体，所以不会
+                // 调用响应 Mapper，也不应为了满足旧契约反向加载 user/reviewedBy。
+                Query query = method.getAnnotation(Query.class);
+                assertThat(query)
+                        .as("%s must use an explicit safe projection", method.getName())
+                        .isNotNull();
+                assertThat(query.value())
+                        .contains("RechargeOrderSummaryProjection")
+                        .doesNotContain("rechargeOrder.reviewedBy")
+                        .doesNotContain("rechargeOrder.user,");
                 continue;
             }
             EntityGraph graph = method.getAnnotation(EntityGraph.class);

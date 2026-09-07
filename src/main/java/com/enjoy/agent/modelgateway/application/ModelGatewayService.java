@@ -161,7 +161,38 @@ public class ModelGatewayService {
                 .stream()
                 .map(this::toConversationMessage)
                 .toList();
-        return streamChatCompletion(preparedChatTurn, conversationMessages, deltaConsumer);
+        return streamChatCompletionInternal(
+                preparedChatTurn.modelConfig(),
+                preparedChatTurn.systemPrompt(),
+                preparedChatTurn.sessionMemory() == null ? null : preparedChatTurn.sessionMemory().summary(),
+                preparedChatTurn.retrievalContext(),
+                conversationMessages,
+                deltaConsumer
+        );
+    }
+
+    /**
+     * 以独立参数流式生成聊天回复。
+     *
+     * <p>普通 Agent 使用 {@link PreparedChatTurn}；平台客服没有也不应伪造 Agent，
+     * 因此通过该入口复用相同的模型协议、超时、响应大小和凭证隔离能力。</p>
+     */
+    public ModelGatewayResult streamChatCompletion(
+            PreparedModelConfig modelConfig,
+            String systemPrompt,
+            String sessionMemorySummary,
+            String retrievalContext,
+            List<ModelGatewayConversationMessage> conversationMessages,
+            Consumer<String> deltaConsumer
+    ) {
+        return streamChatCompletionInternal(
+                modelConfig,
+                systemPrompt,
+                sessionMemorySummary,
+                retrievalContext,
+                conversationMessages,
+                deltaConsumer
+        );
     }
 
     /**
@@ -319,12 +350,14 @@ public class ModelGatewayService {
         }
     }
 
-    private ModelGatewayResult streamChatCompletion(
-            PreparedChatTurn preparedChatTurn,
+    private ModelGatewayResult streamChatCompletionInternal(
+            PreparedModelConfig modelConfig,
+            String systemPrompt,
+            String sessionMemorySummary,
+            String retrievalContext,
             List<ModelGatewayConversationMessage> conversationMessages,
             Consumer<String> deltaConsumer
     ) {
-        PreparedModelConfig modelConfig = preparedChatTurn.modelConfig();
         CredentialSource credentialSource = resolveCredentialSource(modelConfig);
         long startNanos = System.nanoTime();
         String resolvedBaseUrl = resolveBaseUrl(modelConfig);
@@ -333,9 +366,9 @@ public class ModelGatewayService {
             requireNotCancelled(modelConfig, credentialSource, startNanos);
             validateModelConfig(modelConfig, credentialSource);
             promptBudgetEstimator.estimate(
-                    preparedChatTurn.systemPrompt(),
-                    preparedChatTurn.sessionMemory() == null ? null : preparedChatTurn.sessionMemory().summary(),
-                    preparedChatTurn.retrievalContext(),
+                    systemPrompt,
+                    sessionMemorySummary,
+                    retrievalContext,
                     conversationMessages,
                     List.of());
             validateOutboundBaseUrl(resolvedBaseUrl, modelConfig, credentialSource);
@@ -343,9 +376,9 @@ public class ModelGatewayService {
             Prompt prompt = buildPrompt(
                     modelConfig,
                     credentialSource,
-                    preparedChatTurn.systemPrompt(),
-                    preparedChatTurn.sessionMemory() == null ? null : preparedChatTurn.sessionMemory().summary(),
-                    preparedChatTurn.retrievalContext(),
+                    systemPrompt,
+                    sessionMemorySummary,
+                    retrievalContext,
                     conversationMessages,
                     List.of()
             );
