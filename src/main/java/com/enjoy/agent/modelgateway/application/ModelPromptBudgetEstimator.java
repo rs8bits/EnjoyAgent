@@ -27,8 +27,8 @@ final class ModelPromptBudgetEstimator {
     ) {
         Counter counter = new Counter();
         counter.add(systemPrompt);
-        counter.add(sessionMemorySummary);
-        counter.add(retrievalContext);
+        if (sessionMemorySummary != null) counter.add(com.enjoy.agent.shared.runtime.UntrustedContext.wrap("会话摘要", sessionMemorySummary));
+        if (retrievalContext != null) counter.add(com.enjoy.agent.shared.runtime.UntrustedContext.wrap("检索资料", retrievalContext));
         for (ModelGatewayConversationMessage message : safe(messages)) {
             counter.addOverhead(PER_MESSAGE_OVERHEAD_BYTES);
             counter.add(message.role());

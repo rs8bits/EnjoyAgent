@@ -1,0 +1,29 @@
+name: Runtime persistence integration
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  postgres-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: runtime_test_only
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      ENJOY_TEST_DB_URL: jdbc:postgresql://localhost:5432/postgres
+      ENJOY_TEST_DB_USER: postgres
+      ENJOY_TEST_DB_PASSWORD: runtime_test_only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: ./mvnw --batch-mode --no-transfer-progress verify

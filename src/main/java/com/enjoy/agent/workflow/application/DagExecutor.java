@@ -563,7 +563,7 @@ public class DagExecutor {
             if (nodeCtx.executionBudget() != null) {
                 nodeCtx.executionBudget().checkActive();
             }
-            NodeExecutionResult result = nodeExecutor.execute(nodeCtx);
+            NodeExecutionResult result = WorkflowCheckpointService.execute(node, node.getNodeKey(), () -> nodeExecutor.execute(nodeCtx));
             if (eventConsumer != null) {
                 eventConsumer.accept(NodeEvent.completed(node, result.output()));
             }

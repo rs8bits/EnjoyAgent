@@ -59,6 +59,7 @@ import java.io.IOException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import java.util.Objects;
@@ -295,9 +296,9 @@ public class ChatApplicationService {
         }
         final PreparedChatTurn enrichedChatTurn;
         try {
-            enrichedChatTurn = prepareEnrichedChatTurn(
+            enrichedChatTurn = requireTransactionResult(transactionTemplate.execute(status -> prepareChatTurn(
                     sessionId, request.content(), request.toolApprovalTokens(),
-                    claim.handle(), claim.userMessageId());
+                    claim.handle(), claim.userMessageId())));
         } catch (RuntimeException ex) {
             chatTurnIdempotencyService.fail(claim.handle());
             throw ex;
@@ -501,6 +502,22 @@ public class ChatApplicationService {
             boolean isWorkflow,
             ChatTurnIdempotencyService.TurnHandle turnHandle
     ) {
+        java.util.concurrent.ScheduledExecutorService heartbeat = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        Thread worker = Thread.currentThread();
+        heartbeat.scheduleAtFixedRate(() -> {
+            try { synchronized (emitter) { sendEvent(emitter, "heartbeat", Map.of("active", true)); } }
+            catch (IOException ex) { worker.interrupt(); }
+        }, 15, 15, java.util.concurrent.TimeUnit.SECONDS);
+        try (var events = new com.enjoy.agent.shared.runtime.RuntimeEvents(event -> {
+            try { synchronized (emitter) { sendEvent(emitter, "execution", event); } }
+            catch (IOException ex) { throw new ModelGatewayStreamConsumerException("Execution stream disconnected", ex); }
+        })) {
+            executeStreamingTurnWithEvents(emitter, enrichedChatTurn, hasMcpTools, isWorkflow, turnHandle);
+        } finally { heartbeat.shutdownNow(); }
+    }
+
+    private void executeStreamingTurnWithEvents(SseEmitter emitter, PreparedChatTurn enrichedChatTurn,
+            boolean hasMcpTools, boolean isWorkflow, ChatTurnIdempotencyService.TurnHandle turnHandle) {
         try {
             sendStartedEvent(emitter, enrichedChatTurn, hasMcpTools || isWorkflow);
         } catch (IOException ignored) {
@@ -508,13 +525,18 @@ public class ChatApplicationService {
             emitter.complete();
             return;
         }
-        sendRetrievalEventQuietly(emitter, enrichedChatTurn.retrievalDebug());
-
         try {
+            com.enjoy.agent.shared.runtime.RuntimeEvents.emit("run_started", Map.of("sessionId", enrichedChatTurn.sessionId()));
+            com.enjoy.agent.shared.runtime.RuntimeEvents.emit("retrieval_started", Map.of());
+            try { enrichedChatTurn = enrichKnowledgeContext(enrichedChatTurn); }
+            catch (RuntimeException ex) { throw recordModelFailureAndConvert(enrichedChatTurn, toKnowledgeRetrievalFailure(enrichedChatTurn, ex)); }
+            com.enjoy.agent.shared.runtime.RuntimeEvents.emit("retrieval_completed", Map.of("used", enrichedChatTurn.retrievalContext() != null));
+            sendRetrievalEventQuietly(emitter, enrichedChatTurn.retrievalDebug());
             ChatTurnResponse response = hasMcpTools || isWorkflow
                     ? completePreparedChatTurn(enrichedChatTurn, turnHandle)
                     : streamPlainPreparedChatTurn(enrichedChatTurn, emitter, turnHandle);
             try {
+                com.enjoy.agent.shared.runtime.RuntimeEvents.emit("run_completed", Map.of());
                 sendEvent(emitter, "completed", response);
             } catch (IOException ignored) {
                 emitter.complete();
@@ -968,7 +990,7 @@ public class ChatApplicationService {
                         modelConfig.modelName(),
                         resolveCredentialSource(modelConfig).name(),
                         modelConfig.credentialId(),
-                        hasMcpTools ? "SYNC_FALLBACK" : "STREAM"
+                        hasMcpTools ? "EXECUTION" : "STREAM"
                 )
         );
     }

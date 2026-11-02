@@ -33,6 +33,7 @@ public class ToolNodeExecutor implements WorkflowNodeExecutor {
     private static final int MAX_RESOLVED_ARGUMENT_JSON_LENGTH = 100_000;
 
     private final McpRuntimeService mcpRuntimeService;
+    private final com.enjoy.agent.mcp.application.McpActionConfirmationService actionConfirmations;
     private final McpGatewayService mcpGatewayService;
     private final ObjectMapper objectMapper;
     private final McpHighRiskApprovalService approvalService;
@@ -43,8 +44,10 @@ public class ToolNodeExecutor implements WorkflowNodeExecutor {
             McpGatewayService mcpGatewayService,
             McpHighRiskApprovalService approvalService,
             McpToolCallLogService toolCallLogService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            com.enjoy.agent.mcp.application.McpActionConfirmationService actionConfirmations
     ) {
+        this.actionConfirmations = actionConfirmations;
         this.mcpRuntimeService = mcpRuntimeService;
         this.mcpGatewayService = mcpGatewayService;
         this.approvalService = approvalService;
@@ -67,6 +70,7 @@ public class ToolNodeExecutor implements WorkflowNodeExecutor {
         if (ctx.executionBudget() != null) {
             ctx.executionBudget().beforeToolCall();
         }
+        com.enjoy.agent.workflow.application.WorkflowCheckpointService.checkActive();
         String toolCallId = "workflow:" + ctx.node().getNodeKey();
 
         log.info("Calling MCP tool: name={}, toolId={}, agentId={}", tool.name(), tool.id(), ctx.agentId());
@@ -74,12 +78,16 @@ public class ToolNodeExecutor implements WorkflowNodeExecutor {
         McpToolCallResult callResult;
         try {
             if (tool.riskLevel() == McpToolRiskLevel.HIGH) {
-                approvalService.requireApproved(
-                        approvalTokens(ctx), ctx.tenantId(), ctx.userId(), ctx.agentId(), tool.id());
+                String step = ctx.context().getOrDefault("workflow_checkpoint_key", ctx.node().getNodeKey()).toString();
+                String scope = (ctx.accountingTurn() != null ? "chat:" + ctx.accountingTurn().userMessageId()
+                        : "workflow:" + ctx.context().get("workflow_execution_id")) + ":" + step;
+                callResult = actionConfirmations.requireResult(ctx.tenantId(), ctx.userId(), ctx.agentId(),
+                        ctx.sessionId(), scope, tool, arguments);
+            } else {
+                callResult = ctx.mcpTurnSession() == null
+                        ? mcpGatewayService.callTool(tool, arguments)
+                        : ctx.mcpTurnSession().callTool(tool, arguments);
             }
-            callResult = ctx.mcpTurnSession() == null
-                    ? mcpGatewayService.callTool(tool, arguments)
-                    : ctx.mcpTurnSession().callTool(tool, arguments);
         } catch (RuntimeException ex) {
             recordFailure(ctx, tool, toolCallId, requestPayload, null, ex, startNanos);
             if (ex instanceof ApiException apiException) {

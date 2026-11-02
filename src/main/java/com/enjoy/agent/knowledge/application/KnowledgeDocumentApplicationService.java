@@ -274,7 +274,7 @@ public class KnowledgeDocumentApplicationService {
                             document.getId(),
                             knowledgeBase.getTenant().getId(),
                             knowledgeBase.getId(),
-                            chunks,
+                            chunks, documentChunker.locate(text, chunks),
                             preparedKnowledgeBase.embeddingModelConfig(),
                             null
                     );
@@ -472,7 +472,7 @@ public class KnowledgeDocumentApplicationService {
                         documentId,
                         workItem.tenantId(),
                         workItem.knowledgeBaseId(),
-                        chunks,
+                        chunks, documentChunker.locate(text, chunks),
                         preparedKnowledgeBase.embeddingModelConfig(),
                         new AsyncBatchOwnership(deliveryAttempt, workItem)
                 );
@@ -773,6 +773,7 @@ public class KnowledgeDocumentApplicationService {
             Long tenantId,
             Long knowledgeBaseId,
             List<String> chunks,
+            List<DocumentChunker.ChunkLocation> locations,
             PreparedModelConfig embeddingModelConfig,
             AsyncBatchOwnership ownership
     ) {
@@ -793,7 +794,8 @@ public class KnowledgeDocumentApplicationService {
             }
             List<KnowledgeChunkRow> rows = new ArrayList<>(textBatch.size());
             for (int offset = 0; offset < textBatch.size(); offset++) {
-                rows.add(new KnowledgeChunkRow(start + offset, textBatch.get(offset), vectors.get(offset)));
+                rows.add(new KnowledgeChunkRow(start + offset, textBatch.get(offset), vectors.get(offset),
+                        locations == null || locations.isEmpty() ? null : locations.get(start + offset)));
             }
             transactionTemplate.executeWithoutResult(status -> persistChunkBatch(
                     documentId,

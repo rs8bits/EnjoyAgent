@@ -122,6 +122,19 @@ public class WorkflowController {
         return ApiResponse.success(null, "工作流执行已取消");
     }
 
+    @PostMapping("/executions/{executionId}/resume")
+    @PreAuthorize("hasRole('OWNER')")
+    public SseEmitter resume(@PathVariable Long executionId) {
+        SseEmitter emitter = new SseEmitter(workflowOrchestratorService.testRunTimeoutMs());
+        workflowOrchestratorService.resume(executionId, emitter);
+        return emitter;
+    }
+    @GetMapping("/executions/{executionId}/nodes")
+    @PreAuthorize("hasRole('OWNER')")
+    public ApiResponse<java.util.List<Map<String,Object>>> nodes(@PathVariable Long executionId) {
+        return ApiResponse.success(workflowOrchestratorService.nodeHistory(executionId));
+    }
+
     @Operation(summary = "获取工作流执行历史")
     @GetMapping("/{id}/executions")
     @PreAuthorize("hasRole('OWNER')")

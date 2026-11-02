@@ -17,19 +17,22 @@ public class KnowledgeRetrievalService {
     private final QueryRewriteService queryRewriteService;
     private final Retriever retriever;
     private final Reranker reranker;
+    private final KnowledgeEvidenceService evidence;
 
     public KnowledgeRetrievalService(
             KnowledgeChunkRepository knowledgeChunkRepository,
             KnowledgeProperties knowledgeProperties,
             QueryRewriteService queryRewriteService,
             Retriever retriever,
-            Reranker reranker
+            Reranker reranker,
+            KnowledgeEvidenceService evidence
     ) {
         this.knowledgeChunkRepository = knowledgeChunkRepository;
         this.knowledgeProperties = knowledgeProperties;
         this.queryRewriteService = queryRewriteService;
         this.retriever = retriever;
         this.reranker = reranker;
+        this.evidence = evidence;
     }
 
     /**
@@ -50,6 +53,9 @@ public class KnowledgeRetrievalService {
             String question
     ) {
         if (knowledgeBase == null || question == null || question.isBlank()) {
+            return new KnowledgeRetrievalResult(null, null);
+        }
+        if (question.strip().matches("(?i)^(你好|您好|嗨|谢谢|感谢|再见|hello|hi|thanks|thank you)[！!。.,，\\s]*$")) {
             return new KnowledgeRetrievalResult(null, null);
         }
         if (!knowledgeChunkRepository.existsByKnowledgeBase_Id(knowledgeBase.knowledgeBaseId())) {
@@ -91,15 +97,21 @@ public class KnowledgeRetrievalService {
             return null;
         }
         StringBuilder builder = new StringBuilder();
-        builder.append("以下是从知识库“").append(knowledgeBase.knowledgeBaseName()).append("”检索到的相关内容：\n\n");
+        builder.append("以下内容是引用证据。回答中的事实请标注 [来源:对应chunkId]，仅引用本次提供的 ID；证据不足时明确说明。\n")
+                .append("以下是从知识库“").append(knowledgeBase.knowledgeBaseName()).append("”检索到的相关内容：\n\n");
         for (int i = 0; i < selectedHits.size(); i++) {
             KnowledgeRetrievalHit chunk = selectedHits.get(i);
-            builder.append("[片段").append(i + 1).append("]");
+            String main = chunk.content();
+            if (builder.length() + main.length() + 512 > 24_000) break;
+            builder.append("[来源:").append(chunk.chunkId()).append("]");
             if (chunk.documentName() != null && !chunk.documentName().isBlank()) {
                 builder.append("（").append(chunk.documentName()).append(" #").append(chunk.chunkIndex()).append("）");
             }
             builder.append("\n");
-            builder.append(chunk.content()).append("\n\n");
+            builder.append(main).append("\n");
+            String parent = evidence.context(knowledgeBase.knowledgeBaseId(), chunk.chunkId());
+            if (parent != null && builder.length() + parent.length() <= 24_000) builder.append(parent);
+            builder.append("\n");
         }
         return builder.toString().trim();
     }

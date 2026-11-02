@@ -85,8 +85,8 @@ class WorkflowOrchestratorServiceTest {
                 new ObjectMapper(),
                 agentRepository,
                 mcpGatewayService,
-                new WorkflowRuntimeProperties()
-        );
+                new WorkflowRuntimeProperties(),
+                org.mockito.Mockito.mock(com.enjoy.agent.workflow.application.WorkflowCheckpointService.class));
 
         assertThatThrownBy(() -> service.resolveModelConfigForTest(9L, 3L))
                 .isInstanceOf(ApiException.class)
@@ -150,7 +150,7 @@ class WorkflowOrchestratorServiceTest {
         return new WorkflowOrchestratorService(
                 workflowRepository, nodeRepository, edgeRepository, dagExecutor, registry,
                 modelConfigRepository, executionRepository, tenantRepository, new ObjectMapper(),
-                agentRepository, mcpGatewayService, new WorkflowRuntimeProperties());
+                agentRepository, mcpGatewayService, new WorkflowRuntimeProperties(), org.mockito.Mockito.mock(com.enjoy.agent.workflow.application.WorkflowCheckpointService.class));
     }
 
     private WorkflowNode node(Long id, String key, WorkflowNodeType type, Workflow workflow) {

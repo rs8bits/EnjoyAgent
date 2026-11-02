@@ -29,9 +29,9 @@ public class KnowledgeChunkJdbcRepository {
     public void batchInsert(Long tenantId, Long knowledgeBaseId, Long documentId, List<KnowledgeChunkRow> rows) {
         String sql = """
                 INSERT INTO knowledge_chunk
-                    (tenant_id, knowledge_base_id, document_id, chunk_index, content, embedding, created_at, updated_at)
+                    (tenant_id, knowledge_base_id, document_id, chunk_index, content, embedding, source_start, source_end, page_number, heading, created_at, updated_at)
                 VALUES
-                    (?, ?, ?, ?, ?, CAST(? AS vector), NOW(), NOW())
+                    (?, ?, ?, ?, ?, CAST(? AS vector), ?, ?, ?, ?, NOW(), NOW())
                 """;
 
         jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
@@ -44,6 +44,11 @@ public class KnowledgeChunkJdbcRepository {
                 ps.setInt(4, row.chunkIndex());
                 ps.setString(5, row.content());
                 ps.setString(6, toVectorLiteral(row.embedding()));
+                var location = row.location();
+                ps.setObject(7, location == null ? null : location.sourceStart());
+                ps.setObject(8, location == null ? null : location.sourceEnd());
+                ps.setObject(9, location == null ? null : location.pageNumber());
+                ps.setString(10, location == null ? null : location.heading());
             }
 
             @Override

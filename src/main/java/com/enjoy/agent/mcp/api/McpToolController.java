@@ -60,6 +60,7 @@ public class McpToolController {
             @PathVariable Long id,
             @RequestParam Long agentId
     ) {
-        return ApiResponse.success(approvalService.issueApproval(id, agentId));
+        throw new com.enjoy.agent.shared.exception.ApiException("MCP_PARAMETER_CONFIRMATION_REQUIRED",
+                "请通过运行时确认卡片审核具体参数；工具级预授权已停用。", org.springframework.http.HttpStatus.GONE);
     }
 }

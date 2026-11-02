@@ -34,6 +34,7 @@ import org.springframework.util.StringUtils;
 public class McpChatOrchestratorService {
 
     private final ModelGatewayService modelGatewayService;
+    private final com.enjoy.agent.mcp.application.McpActionConfirmationService actionConfirmations;
     private final ModelCallAccountingService modelCallAccountingService;
     private final McpGatewayService mcpGatewayService;
     private final McpToolCallLogService mcpToolCallLogService;
@@ -50,8 +51,10 @@ public class McpChatOrchestratorService {
             McpHighRiskApprovalService approvalService,
             McpRuntimeProperties mcpRuntimeProperties,
             ObjectMapper objectMapper,
-            BillingUsageApplicationService billingUsageApplicationService
+            BillingUsageApplicationService billingUsageApplicationService,
+            com.enjoy.agent.mcp.application.McpActionConfirmationService actionConfirmations
     ) {
+        this.actionConfirmations = actionConfirmations;
         this.modelGatewayService = modelGatewayService;
         this.modelCallAccountingService = modelCallAccountingService;
         this.mcpGatewayService = mcpGatewayService;
@@ -93,12 +96,14 @@ public class McpChatOrchestratorService {
             List<ModelGatewayToolDefinition> availableTools = round == maxToolRounds
                     ? List.of()
                     : toolDefinitions;
+            com.enjoy.agent.shared.runtime.RuntimeEvents.emit("model_started", Map.of("round", round));
             ModelGatewayChatCompletion completion = invokeModel(
                     preparedChatTurn,
                     conversationMessages,
                     availableTools,
                     modelTokenBudget
             );
+            com.enjoy.agent.shared.runtime.RuntimeEvents.emit("model_completed", Map.of("round", round));
             if (completion.toolCalls().isEmpty()) {
                 return completion.toResult();
             }
@@ -184,10 +189,15 @@ public class McpChatOrchestratorService {
 
         McpToolCallResult result;
         try {
-            approvalService.requireApproved(preparedChatTurn, tool);
             Map<String, Object> arguments = parseArguments(toolCall.argumentsJson());
-            result = gatewaySession.callTool(tool, arguments);
+            com.enjoy.agent.shared.runtime.RuntimeEvents.emit("tool_started", Map.of("toolName", tool.name(), "toolId", tool.id()));
+            result = tool.riskLevel() == com.enjoy.agent.mcp.domain.enums.McpToolRiskLevel.HIGH
+                    ? actionConfirmations.requireResult(preparedChatTurn.tenantId(), preparedChatTurn.userId(),
+                        preparedChatTurn.agentId(), preparedChatTurn.sessionId(), "chat:" + preparedChatTurn.userMessageId(), tool, arguments)
+                    : gatewaySession.callTool(tool, arguments);
         } catch (RuntimeException ex) {
+            if (ex instanceof ApiException api && "MCP_ACTION_CONFIRMATION_REQUIRED".equals(api.getCode())) throw api;
+            com.enjoy.agent.shared.runtime.RuntimeEvents.emit("tool_failed", Map.of("toolName", tool.name()));
             String failureCode = ex instanceof ApiException apiException
                     ? apiException.getCode()
                     : "MCP_TOOL_INVOCATION_FAILED";
@@ -202,6 +212,7 @@ public class McpChatOrchestratorService {
         }
 
         long latencyMs = elapsedMillis(startNanos);
+        com.enjoy.agent.shared.runtime.RuntimeEvents.emit("tool_completed", Map.of("toolName", tool.name(), "latencyMs", latencyMs, "error", result.error()));
         if (result.error()) {
             McpToolCallFailure failure = new McpToolCallFailure(
                     "MCP_TOOL_REPORTED_ERROR",

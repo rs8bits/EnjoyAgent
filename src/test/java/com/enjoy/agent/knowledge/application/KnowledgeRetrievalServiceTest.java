@@ -44,8 +44,8 @@ class KnowledgeRetrievalServiceTest {
                 knowledgeProperties,
                 queryRewriteService,
                 retriever,
-                reranker
-        );
+                reranker,
+                org.mockito.Mockito.mock(KnowledgeEvidenceService.class));
     }
 
     @Test
@@ -95,9 +95,9 @@ class KnowledgeRetrievalServiceTest {
 
         assertThat(retrievalResult.retrievalContext())
                 .contains("知识库“产品知识库”")
-                .contains("[片段1]（员工手册.pdf #1）")
+                .contains("[来源:2]（员工手册.pdf #1）")
                 .contains("第二段命中文本")
-                .contains("[片段2]（员工手册.pdf #0）")
+                .contains("[来源:1]（员工手册.pdf #0）")
                 .contains("第一段命中文本");
         assertThat(retrievalResult.debug()).isNotNull();
         assertThat(retrievalResult.debug().originalQuery()).isEqualTo("这是一个问题");

@@ -36,14 +36,36 @@ import org.springframework.http.HttpStatus;
 class ToolNodeExecutorTest {
 
     @Test
+    void confirmedHighRiskResultStillUsesToolAuditAndNeverRepeatsRemoteCall() {
+        var runtime = Mockito.mock(McpRuntimeService.class);
+        var gateway = Mockito.mock(McpGatewayService.class);
+        var logs = Mockito.mock(McpToolCallLogService.class);
+        var actions = Mockito.mock(com.enjoy.agent.mcp.application.McpActionConfirmationService.class);
+        var selected = tool(McpToolRiskLevel.HIGH);
+        when(runtime.getRunnableToolForTenant(7L, 13L)).thenReturn(selected);
+        var node = new WorkflowNode();
+        node.setNodeType(WorkflowNodeType.TOOL);
+        node.setNodeKey("delete_step");
+        node.setConfigJson("{\"toolId\":13,\"arguments\":{\"recordId\":42}}");
+        var turn = Mockito.mock(PreparedChatTurn.class);
+        when(turn.userMessageId()).thenReturn(55L);
+        var result = new McpToolCallResult("confirmed result", "{}");
+        when(actions.requireResult(7L,11L,5L,8L,"chat:55:delete_step",selected,Map.of("recordId",42))).thenReturn(result);
+        var executor = new ToolNodeExecutor(runtime,gateway,Mockito.mock(McpHighRiskApprovalService.class),logs,new ObjectMapper(),actions);
+        assertThat(executor.execute(context(node,turn,new WorkflowExecutionBudget(new WorkflowRuntimeProperties()))).output()).containsEntry("tool_result","confirmed result");
+        verify(logs).recordSuccess(eq(turn),eq(selected),eq("workflow:delete_step"),any(),eq(result),org.mockito.ArgumentMatchers.anyLong());
+        Mockito.verifyNoInteractions(gateway);
+    }
+
+    @Test
     void execute_shouldRequireAgentContextBeforeLoadingTools() {
         ToolNodeExecutor executor = new ToolNodeExecutor(
                 Mockito.mock(com.enjoy.agent.mcp.application.McpRuntimeService.class),
                 Mockito.mock(com.enjoy.agent.mcp.application.McpGatewayService.class),
                 Mockito.mock(com.enjoy.agent.mcp.application.McpHighRiskApprovalService.class),
                 Mockito.mock(com.enjoy.agent.mcp.application.McpToolCallLogService.class),
-                new ObjectMapper()
-        );
+                new ObjectMapper(),
+                org.mockito.Mockito.mock(com.enjoy.agent.mcp.application.McpActionConfirmationService.class));
 
         WorkflowNode node = new WorkflowNode();
         node.setNodeType(WorkflowNodeType.TOOL);
@@ -80,7 +102,7 @@ class ToolNodeExecutorTest {
         PreparedMcpTool tool = tool(McpToolRiskLevel.HIGH);
         when(runtimeService.getRunnableToolForTenant(7L, 13L)).thenReturn(tool);
         ToolNodeExecutor executor = new ToolNodeExecutor(
-                runtimeService, gatewayService, approvalService, logService, new ObjectMapper());
+                runtimeService, gatewayService, approvalService, logService, new ObjectMapper(), org.mockito.Mockito.mock(com.enjoy.agent.mcp.application.McpActionConfirmationService.class));
         WorkflowRuntimeProperties properties = new WorkflowRuntimeProperties();
         properties.setMaxToolCalls(1);
         WorkflowExecutionBudget budget = new WorkflowExecutionBudget(properties);
@@ -104,7 +126,7 @@ class ToolNodeExecutorTest {
         when(runtimeService.getRunnableToolForTenant(7L, 13L)).thenReturn(tool);
         when(gatewayService.callTool(eq(tool), any())).thenReturn(new McpToolCallResult(null, null, false));
         ToolNodeExecutor executor = new ToolNodeExecutor(
-                runtimeService, gatewayService, approvalService, logService, new ObjectMapper());
+                runtimeService, gatewayService, approvalService, logService, new ObjectMapper(), org.mockito.Mockito.mock(com.enjoy.agent.mcp.application.McpActionConfirmationService.class));
 
         NodeExecutionResult result = executor.execute(context(toolNode(), accountingTurn, null));
 
@@ -126,7 +148,7 @@ class ToolNodeExecutorTest {
         when(gatewayService.callTool(eq(tool), any()))
                 .thenReturn(new McpToolCallResult("remote error", "{\"secret\":\"x\"}", true));
         ToolNodeExecutor executor = new ToolNodeExecutor(
-                runtimeService, gatewayService, approvalService, logService, new ObjectMapper());
+                runtimeService, gatewayService, approvalService, logService, new ObjectMapper(), org.mockito.Mockito.mock(com.enjoy.agent.mcp.application.McpActionConfirmationService.class));
 
         assertThatThrownBy(() -> executor.execute(context(toolNode(), accountingTurn, null)))
                 .isInstanceOfSatisfying(ApiException.class, ex ->
@@ -150,7 +172,7 @@ class ToolNodeExecutorTest {
                 gatewayService,
                 Mockito.mock(McpHighRiskApprovalService.class),
                 Mockito.mock(McpToolCallLogService.class),
-                new ObjectMapper());
+                new ObjectMapper(), org.mockito.Mockito.mock(com.enjoy.agent.mcp.application.McpActionConfirmationService.class));
         WorkflowNode node = toolNode();
         node.setConfigJson("{\"toolId\":13,\"arguments\":{"
                 + "\"payload\":\"{{#producer.payload#}}\","

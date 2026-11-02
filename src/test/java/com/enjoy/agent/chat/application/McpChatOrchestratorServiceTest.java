@@ -85,8 +85,8 @@ class McpChatOrchestratorServiceTest {
                 approvalService,
                 properties,
                 new ObjectMapper(),
-                billingUsageApplicationService
-        );
+                billingUsageApplicationService,
+                org.mockito.Mockito.mock(com.enjoy.agent.mcp.application.McpActionConfirmationService.class));
 
         PreparedChatTurn preparedChatTurn = preparedChatTurn();
         ModelGatewayToolCall toolCall = new ModelGatewayToolCall("call-1", "demo_tool", "{\"foo\":\"bar\"}");
@@ -150,8 +150,8 @@ class McpChatOrchestratorServiceTest {
                 approvalService,
                 properties,
                 new ObjectMapper(),
-                billingUsageApplicationService
-        );
+                billingUsageApplicationService,
+                org.mockito.Mockito.mock(com.enjoy.agent.mcp.application.McpActionConfirmationService.class));
 
         PreparedChatTurn preparedChatTurn = preparedChatTurn();
         ModelGatewayToolCall toolCall = new ModelGatewayToolCall("call-1", "demo_tool", "{\"foo\":\"bar\"}");
@@ -192,8 +192,8 @@ class McpChatOrchestratorServiceTest {
                 approvalService,
                 properties,
                 new ObjectMapper(),
-                billingUsageApplicationService
-        );
+                billingUsageApplicationService,
+                org.mockito.Mockito.mock(com.enjoy.agent.mcp.application.McpActionConfirmationService.class));
 
         ModelGatewayToolCall toolCall = new ModelGatewayToolCall("call-1", "demo_tool", "{\"foo\":\"bar\"}");
         when(modelGatewayService.generateChatCompletion(any(), anyList(), anyList()))
@@ -253,8 +253,8 @@ class McpChatOrchestratorServiceTest {
                 approvalService,
                 properties,
                 new ObjectMapper(),
-                billingUsageApplicationService
-        );
+                billingUsageApplicationService,
+                org.mockito.Mockito.mock(com.enjoy.agent.mcp.application.McpActionConfirmationService.class));
         PreparedMcpTool first = preparedChatTurn().mcpTools().get(0);
         PreparedMcpTool second = new PreparedMcpTool(
                 11L,
@@ -289,8 +289,8 @@ class McpChatOrchestratorServiceTest {
                 approvalService,
                 properties,
                 new ObjectMapper(),
-                billingUsageApplicationService
-        );
+                billingUsageApplicationService,
+                org.mockito.Mockito.mock(com.enjoy.agent.mcp.application.McpActionConfirmationService.class));
         ModelGatewayToolCall toolCall = new ModelGatewayToolCall("call-1", "demo_tool", "{\"foo\":\"bar\"}");
         when(modelGatewayService.generateChatCompletion(any(), anyList(), anyList()))
                 .thenReturn(new ModelGatewayChatCompletion(

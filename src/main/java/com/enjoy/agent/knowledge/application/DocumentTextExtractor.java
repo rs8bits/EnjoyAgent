@@ -189,6 +189,7 @@ public class DocumentTextExtractor {
                 }
             };
             LimitedStringWriter writer = new LimitedStringWriter(properties.getMaxExtractedTextChars());
+            textStripper.setPageEnd("\n\f\n");
             textStripper.writeText(document, writer);
             return writer.toString();
         }

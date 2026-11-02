@@ -79,11 +79,14 @@ public class LoopNodeExecutor implements WorkflowNodeExecutor {
                     bodyContext.put("node_inputs", Map.of(previousNodeKey, previousOutput));
                     bodyContext.put("node_input", WorkflowVariableResolver.primaryOutput(previousOutput));
                 }
+                bodyContext.put("workflow_checkpoint_key", ctx.node().getNodeKey() + "/" + i + "/" + bodyNode.getNodeKey());
                 NodeExecutionContext bodyCtx = ctx.withNodeAndContext(bodyNode, bodyContext);
                 if (bodyCtx.executionBudget() != null) {
                     bodyCtx.executionBudget().checkActive();
                 }
-                NodeExecutionResult result = executor.execute(bodyCtx);
+                String checkpointKey = ctx.node().getNodeKey() + "/" + i + "/" + bodyNode.getNodeKey();
+                NodeExecutionResult result = com.enjoy.agent.workflow.application.WorkflowCheckpointService.execute(
+                        bodyNode, checkpointKey, () -> executor.execute(bodyCtx));
                 Map<String, Object> output = WorkflowVariableResolver.immutableOutput(result.output());
                 String bodyNodeKey = bodyNode.getNodeKey();
                 bodyOutputs.put(bodyNodeKey, output);

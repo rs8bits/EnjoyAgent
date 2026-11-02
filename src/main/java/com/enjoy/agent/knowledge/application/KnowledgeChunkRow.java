@@ -6,6 +6,8 @@ package com.enjoy.agent.knowledge.application;
 public record KnowledgeChunkRow(
         int chunkIndex,
         String content,
-        float[] embedding
+        float[] embedding,
+        DocumentChunker.ChunkLocation location
 ) {
+    public KnowledgeChunkRow(int chunkIndex, String content, float[] embedding) { this(chunkIndex, content, embedding, null); }
 }
