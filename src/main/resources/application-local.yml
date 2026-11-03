@@ -18,6 +18,8 @@ spring:
     show-sql: true
 
 enjoy:
+  sandbox:
+    enabled: ${APP_SANDBOX_ENABLED:true}
   security:
     jwt-secret: ${APP_JWT_SECRET:change-me-to-a-long-random-string}
     allow-insecure-development-secret: true

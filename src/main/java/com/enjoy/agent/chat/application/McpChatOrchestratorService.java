@@ -32,6 +32,9 @@ import org.springframework.util.StringUtils;
  */
 @Service
 public class McpChatOrchestratorService {
+    private com.enjoy.agent.sandbox.application.SandboxRuntimeService sandboxRuntime;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setSandboxRuntime(com.enjoy.agent.sandbox.application.SandboxRuntimeService runtime){this.sandboxRuntime=runtime;}
 
     private final ModelGatewayService modelGatewayService;
     private final com.enjoy.agent.mcp.application.McpActionConfirmationService actionConfirmations;
@@ -82,12 +85,20 @@ public class McpChatOrchestratorService {
         Map<String, PreparedMcpTool> toolsByName = indexToolsByUniqueName(preparedChatTurn.mcpTools());
         List<ModelGatewayToolDefinition> toolDefinitions = toolsByName.values().stream()
                 .map(tool -> new ModelGatewayToolDefinition(tool.name(), tool.description(), tool.inputSchemaJson()))
-                .toList();
+                .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+        boolean builtins=sandboxRuntime!=null && sandboxRuntime.enabled(preparedChatTurn.tenantId(),preparedChatTurn.agentId());
+        if(builtins){
+            var definitions=com.enjoy.agent.sandbox.application.SandboxToolCatalog.definitions(objectMapper);
+            if(definitions.stream().anyMatch(definition->toolsByName.containsKey(definition.name())))throw new ApiException("TOOL_NAME_CONFLICT","MCP 工具与内置文件工具名称冲突",HttpStatus.BAD_REQUEST);
+            toolDefinitions.addAll(definitions);
+        }
         List<ModelGatewayConversationMessage> conversationMessages = preparedChatTurn.historyMessages().stream()
                 .map(message -> message.role() == com.enjoy.agent.chat.domain.enums.ChatMessageRole.USER
                         ? ModelGatewayConversationMessage.user(message.content())
                         : ModelGatewayConversationMessage.assistant(message.content()))
                 .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+        if(builtins)conversationMessages.add(ModelGatewayConversationMessage.user(sandboxRuntime.fileContext(preparedChatTurn)));
+        int sandboxCalls=0;long sandboxDeadline=System.nanoTime()+java.time.Duration.ofMinutes(10).toNanos();
 
         int maxToolRounds = mcpRuntimeProperties.getMaxToolRounds();
         McpModelTokenBudget modelTokenBudget = new McpModelTokenBudget(
@@ -114,8 +125,13 @@ public class McpChatOrchestratorService {
             }
 
             conversationMessages.add(ModelGatewayConversationMessage.assistantToolCalls(completion.toolCalls()));
-            for (ModelGatewayToolCall toolCall : completion.toolCalls()) {
-                String toolMessage = executeTool(preparedChatTurn, toolsByName, toolCall, gatewaySession);
+            for (int index=0;index<completion.toolCalls().size();index++) {
+                ModelGatewayToolCall toolCall=completion.toolCalls().get(index);
+                String toolMessage;
+                if(builtins && com.enjoy.agent.sandbox.application.SandboxToolCatalog.OPERATIONS.containsKey(toolCall.name())){
+                    if(++sandboxCalls>10 || System.nanoTime()>sandboxDeadline)throw new ApiException("SANDBOX_TOOL_BUDGET_EXCEEDED","文件处理超过本轮执行预算",HttpStatus.BAD_REQUEST);
+                    toolMessage=sandboxRuntime.executeAgent(preparedChatTurn,toolCall.name(),toolCall.argumentsJson(),round,index);
+                }else toolMessage = executeTool(preparedChatTurn, toolsByName, toolCall, gatewaySession);
                 conversationMessages.add(ModelGatewayConversationMessage.tool(toolCall.id(), toolMessage));
             }
         }

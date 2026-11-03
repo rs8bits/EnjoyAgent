@@ -5,6 +5,7 @@ public enum WorkflowNodeType {
     LLM,
     KNOWLEDGE,
     TOOL,
+    SANDBOX,
     CONDITION,
     LOOP,
     END

@@ -69,6 +69,16 @@ logging:
 
 # 平台自定义配置
 enjoy:
+  sandbox:
+    enabled: ${APP_SANDBOX_ENABLED:false}
+    manager-url: ${SANDBOX_MANAGER_URL:http://127.0.0.1:8091}
+    token-file: ${SANDBOX_TOKEN_FILE:.sandbox/manager-token}
+    max-file-bytes: ${APP_SANDBOX_MAX_FILE_BYTES:20971520}
+    max-stored-bytes-per-user: ${APP_SANDBOX_MAX_STORED_BYTES_PER_USER:2147483648}
+    max-files-per-user: ${APP_SANDBOX_MAX_FILES_PER_USER:1000}
+    max-active-tasks-per-tenant: ${APP_SANDBOX_MAX_ACTIVE_TASKS_PER_TENANT:20}
+    max-output-bytes: ${APP_SANDBOX_MAX_OUTPUT_BYTES:209715200}
+    default-timeout-seconds: ${APP_SANDBOX_DEFAULT_TIMEOUT_SECONDS:120}
   cache:
     agent-config-enabled: ${APP_CACHE_AGENT_CONFIG_ENABLED:true}
     agent-config-local-enabled: ${APP_CACHE_AGENT_CONFIG_LOCAL_ENABLED:true}

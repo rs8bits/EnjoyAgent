@@ -27,7 +27,7 @@ public record SaveWorkflowCanvasRequest(
             @jakarta.validation.constraints.NotBlank
             @jakarta.validation.constraints.Size(max = 32)
             @jakarta.validation.constraints.Pattern(
-                    regexp = "(?i)START|LLM|KNOWLEDGE|TOOL|CONDITION|LOOP|END") String nodeType,
+                    regexp = "(?i)START|LLM|KNOWLEDGE|TOOL|SANDBOX|CONDITION|LOOP|END") String nodeType,
 
             @Schema(description = "节点配置 JSON", example = "{}")
             @jakarta.validation.constraints.Size(max = 100_000) String configJson,

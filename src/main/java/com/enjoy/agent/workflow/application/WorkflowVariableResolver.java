@@ -38,6 +38,7 @@ public final class WorkflowVariableResolver {
                     "llm_prompt_tokens", "llm_completion_tokens"),
             WorkflowNodeType.KNOWLEDGE, Set.of("retrieval_context"),
             WorkflowNodeType.TOOL, Set.of("tool_result", "tool_raw_response"),
+            WorkflowNodeType.SANDBOX, Set.of("sandbox_result","artifact_ids","artifacts","task_id"),
             WorkflowNodeType.CONDITION, Set.of("condition_result"),
             WorkflowNodeType.LOOP, Set.of("loop_iterations", "loop_break_reason", "body_outputs"),
             WorkflowNodeType.END, Set.of("final_output")
@@ -255,6 +256,7 @@ public final class WorkflowVariableResolver {
 
     private static boolean isContextRoot(String root) {
         return "user_input".equals(root)
+                || "input_file_ids".equals(root)
                 || "node_input".equals(root)
                 || "node_inputs".equals(root)
                 || LEGACY_FLAT_FIELDS.contains(root);

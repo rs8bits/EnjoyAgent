@@ -21,6 +21,9 @@ public record ChatMessageResponse(
         String content,
 
         @Schema(description = "创建时间")
-        Instant createdAt
+        Instant createdAt,
+        java.util.List<com.enjoy.agent.files.application.FileAsset.View> files
 ) {
+    public ChatMessageResponse {files=files==null?java.util.List.of():java.util.List.copyOf(files);}
+    public ChatMessageResponse(Long id,Long sessionId,String role,String content,Instant createdAt){this(id,sessionId,role,content,createdAt,java.util.List.of());}
 }

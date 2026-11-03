@@ -66,6 +66,9 @@ public class WorkflowOrchestratorService {
     private final WorkflowOutputSanitizer outputSanitizer = new WorkflowOutputSanitizer();
     private final WorkflowCheckpointService checkpoints;
     private final Map<Long, ActiveTestRun> activeTestRuns = new ConcurrentHashMap<>();
+    private com.enjoy.agent.sandbox.application.SandboxRuntimeService sandboxRuntime;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setSandboxRuntime(com.enjoy.agent.sandbox.application.SandboxRuntimeService runtime){this.sandboxRuntime=runtime;}
 
     public WorkflowOrchestratorService(
             WorkflowRepository workflowRepository,
@@ -120,6 +123,8 @@ public class WorkflowOrchestratorService {
                 turn.userId(), turn.userMessageId(), null, turn.latestUserMessageContent(), nodes, edges, previous != null);
         try (checkpoint; McpGatewayService.McpTurnSession mcpTurnSession = mcpGatewayService.openTurnSession()) {
             Map<String, Object> initialContext = new HashMap<>();
+            initialContext.put("workflow_execution_id",execution.getId());
+            initialContext.put("input_file_ids",sandboxRuntime==null?List.of():sandboxRuntime.availableFiles(turn).stream().map(file->file.id().toString()).toList());
             initialContext.put("user_input", turn.latestUserMessageContent());
             initialContext.put("history_messages", turn.historyMessages());
             initialContext.put("system_prompt", turn.systemPrompt());
@@ -259,6 +264,7 @@ public class WorkflowOrchestratorService {
                     sendErrorAndComplete(emitter, ex.getCode(), ex.getMessage());
                 }
             } catch (Exception ex) {
+                log.warn("Workflow test-run failed: workflowId={}, errorType={}, location={}",workflowId,ex.getClass().getName(),ex.getStackTrace().length==0?"unknown":ex.getStackTrace()[0]);
                 boolean cancelled = clientDisconnected.get() || Thread.currentThread().isInterrupted();
                 if (checkpoint != null && !checkpoint.finish(cancelled ? "CANCELLED" : "FAILED")) claimed = false;
                 if (execution != null && claimed) {
@@ -324,6 +330,7 @@ public class WorkflowOrchestratorService {
                     HttpStatus.CONFLICT);
         }
         active.budget().cancel();
+        if(sandboxRuntime!=null)sandboxRuntime.cancelWorkflow(executionId,currentUser.tenantId());
         active.thread().interrupt();
     }
 

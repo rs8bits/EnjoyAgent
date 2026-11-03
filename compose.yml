@@ -1,4 +1,65 @@
 services:
+  sandbox-runtime-image:
+    image: enjoyagent-python:local
+    build:
+      context: ./sandbox/runtime
+    restart: "no"
+    entrypoint: ["python", "-c", "print('Sandbox runtime image is ready')"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  sandbox-documents-image:
+    image: enjoyagent-documents:local
+    build:
+      context: ./sandbox/documents
+      additional_contexts:
+        sandbox_base: service:sandbox-runtime-image
+    restart: "no"
+    entrypoint: ["python", "-c", "print('Document runtime image is ready')"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  sandbox-manager:
+    image: enjoyagent-sandbox-manager:local
+    build:
+      context: ./sandbox/manager
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${SANDBOX_MANAGER_PORT:-8091}:8091"
+    environment:
+      SANDBOX_WORK_ROOT: ${SANDBOX_WORK_ROOT:-${PWD}/.sandbox/work}
+      SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
+      SANDBOX_RUNTIME_IMAGE: enjoyagent-python:local
+      SANDBOX_DOCUMENT_IMAGE: enjoyagent-documents:local
+      SANDBOX_NAMESPACE: ${SANDBOX_NAMESPACE:-enjoyagent-local}
+      SANDBOX_MAX_CONCURRENT: ${SANDBOX_MAX_CONCURRENT:-2}
+      SANDBOX_MAX_PER_TENANT: ${SANDBOX_MAX_PER_TENANT:-1}
+      SANDBOX_MEMORY_BYTES: ${SANDBOX_MEMORY_BYTES:-1073741824}
+      SANDBOX_CPUS: ${SANDBOX_CPUS:-1}
+      SANDBOX_MAX_OUTPUT_BYTES: ${APP_SANDBOX_MAX_OUTPUT_BYTES:-209715200}
+      SANDBOX_MAX_WORKSPACE_BYTES: ${SANDBOX_MAX_WORKSPACE_BYTES:-1073741824}
+      SANDBOX_MAX_LOG_BYTES: ${SANDBOX_MAX_LOG_BYTES:-1048576}
+      SANDBOX_RETENTION_HOURS: ${SANDBOX_RETENTION_HOURS:-168}
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./.sandbox/manager-token:/run/secrets/sandbox-token:ro
+      # The same absolute path must exist in Manager and on the Docker daemon host.
+      - ${SANDBOX_WORK_ROOT:-${PWD}/.sandbox/work}:${SANDBOX_WORK_ROOT:-${PWD}/.sandbox/work}
+    depends_on:
+      sandbox-runtime-image:
+        condition: service_completed_successfully
+      sandbox-documents-image:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8091/health | grep -q '\"ready\":true'"]
+      interval: 10s
+      timeout: 15s
+      retries: 6
+
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped

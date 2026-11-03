@@ -220,6 +220,7 @@ public class ChatTurnIdempotencyService {
             // its idempotency identity or inserting another USER message.
             Map<String, Object> semanticRequest = new LinkedHashMap<>();
             semanticRequest.put("content", request.content());
+            if(!request.fileIds().isEmpty()) semanticRequest.put("fileIds",request.fileIds().stream().distinct().sorted().toList());
             byte[] canonical = objectMapper.writeValueAsBytes(semanticRequest);
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(canonical));
         } catch (Exception ex) {

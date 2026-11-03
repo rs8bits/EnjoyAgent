@@ -684,6 +684,7 @@ public class DagExecutor {
         return node.getNodeType() == WorkflowNodeType.LLM
                 || node.getNodeType() == WorkflowNodeType.KNOWLEDGE
                 || node.getNodeType() == WorkflowNodeType.TOOL
+                || node.getNodeType() == WorkflowNodeType.SANDBOX
                 || node.getNodeType() == WorkflowNodeType.LOOP;
     }
 

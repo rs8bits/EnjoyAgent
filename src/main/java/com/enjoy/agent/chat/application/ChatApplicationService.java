@@ -78,7 +78,10 @@ import org.springframework.security.core.context.SecurityContextHolder;
 @Service
 public class ChatApplicationService {
 
-    private static final long CHAT_STREAM_TIMEOUT_MS = 300_000L;
+    private static final long CHAT_STREAM_TIMEOUT_MS = 900_000L;
+    private com.enjoy.agent.sandbox.application.SandboxRuntimeService sandboxRuntime;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setSandboxRuntime(com.enjoy.agent.sandbox.application.SandboxRuntimeService runtime){this.sandboxRuntime=runtime;}
 
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
@@ -266,7 +269,7 @@ public class ChatApplicationService {
         try {
             PreparedChatTurn enrichedChatTurn = prepareEnrichedChatTurn(
                     sessionId, request.content(), request.toolApprovalTokens(),
-                    claim.handle(), claim.userMessageId());
+                    claim.handle(), claim.userMessageId(),request.fileIds());
             ChatTurnResponse response = completePreparedChatTurn(enrichedChatTurn, claim.handle());
             return response;
         } catch (RuntimeException ex) {
@@ -296,9 +299,9 @@ public class ChatApplicationService {
         }
         final PreparedChatTurn enrichedChatTurn;
         try {
-            enrichedChatTurn = requireTransactionResult(transactionTemplate.execute(status -> prepareChatTurn(
+            enrichedChatTurn = requireTransactionResult(transactionTemplate.execute(status -> {var turn=prepareChatTurn(
                     sessionId, request.content(), request.toolApprovalTokens(),
-                    claim.handle(), claim.userMessageId())));
+                    claim.handle(), claim.userMessageId());if(sandboxRuntime!=null)sandboxRuntime.attachInputs(turn,request.fileIds());return turn;}));
         } catch (RuntimeException ex) {
             chatTurnIdempotencyService.fail(claim.handle());
             throw ex;
@@ -340,12 +343,13 @@ public class ChatApplicationService {
             String content,
             List<String> toolApprovalTokens,
             ChatTurnIdempotencyService.TurnHandle turnHandle,
-            Long existingUserMessageId
+            Long existingUserMessageId,
+            java.util.List<java.util.UUID> fileIds
     ) {
-        PreparedChatTurn preparedChatTurn = requireTransactionResult(transactionTemplate.execute(status ->
-                prepareChatTurn(
-                        sessionId, content, toolApprovalTokens, turnHandle, existingUserMessageId)
-        ));
+        PreparedChatTurn preparedChatTurn = requireTransactionResult(transactionTemplate.execute(status -> {
+                var turn=prepareChatTurn(sessionId, content, toolApprovalTokens, turnHandle, existingUserMessageId);
+                if(sandboxRuntime!=null)sandboxRuntime.attachInputs(turn,fileIds);return turn;
+        }));
         try {
             return enrichKnowledgeContext(preparedChatTurn);
         } catch (RuntimeException ex) {
@@ -611,6 +615,7 @@ public class ChatApplicationService {
         assistantMessage.setRole(ChatMessageRole.ASSISTANT);
         assistantMessage.setContent(result.content());
         ChatMessage savedAssistantMessage = chatMessageRepository.saveAndFlush(assistantMessage);
+        if(sandboxRuntime!=null)sandboxRuntime.linkArtifacts(preparedChatTurn,savedAssistantMessage.getId());
 
         touchSession(session);
         ModelCallLog savedModelCallLog = null;
@@ -885,7 +890,8 @@ public class ChatApplicationService {
     }
 
     private boolean hasMcpTools(PreparedChatTurn preparedChatTurn) {
-        return preparedChatTurn.mcpTools() != null && !preparedChatTurn.mcpTools().isEmpty();
+        return preparedChatTurn.mcpTools() != null && !preparedChatTurn.mcpTools().isEmpty()
+            || sandboxRuntime!=null && sandboxRuntime.enabled(preparedChatTurn.tenantId(),preparedChatTurn.agentId());
     }
 
     private ApiException recordModelFailureAndConvert(
@@ -969,7 +975,8 @@ public class ChatApplicationService {
                 message.getSession().getId(),
                 message.getRole().name(),
                 message.getContent(),
-                message.getCreatedAt()
+                message.getCreatedAt(),
+                sandboxRuntime==null?List.of():sandboxRuntime.messageFiles(message.getId(),CurrentUserContext.requireCurrentUser().tenantId(),CurrentUserContext.requireCurrentUser().userId())
         );
     }
 

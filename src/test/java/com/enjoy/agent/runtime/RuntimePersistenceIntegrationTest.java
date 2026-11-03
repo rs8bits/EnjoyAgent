@@ -53,7 +53,9 @@ class RuntimePersistenceIntegrationTest {
     Flyway.configure().dataSource(admin).schemas(schema).defaultSchema(schema).load().migrate();
     source =
         new DriverManagerDataSource(
-            url + (url.contains("?") ? "&" : "?") + "currentSchema=" + schema, user, password);
+            url + (url.contains("?") ? "&" : "?") + "currentSchema=" + schema + ",public",
+            user,
+            password);
     db = new JdbcTemplate(source);
   }
 
@@ -219,6 +221,32 @@ class RuntimePersistenceIntegrationTest {
     node.setNodeType(type);
     node.setConfigJson("{}");
     return node;
+  }
+
+  @Test
+  void snapshotsEdgesAcrossDifferentEntityInstances() {
+    var service = new WorkflowCheckpointService(db, new ObjectMapper(), crypto);
+    var execution = execution();
+    var start = node("start", WorkflowNodeType.START);
+    start.setId(1L);
+    var end = node("end", WorkflowNodeType.END);
+    end.setId(2L);
+    var detachedStart = node("start", WorkflowNodeType.START);
+    detachedStart.setId(1L);
+    var detachedEnd = node("end", WorkflowNodeType.END);
+    detachedEnd.setId(2L);
+    var edge = new WorkflowEdge();
+    edge.setSourceNode(detachedStart);
+    edge.setTargetNode(detachedEnd);
+    try (var scope =
+        service.open(execution, 1L, null, 3L, "q", List.of(start, end), List.of(edge), false)) {
+      scope.finish("COMPLETED");
+    }
+    var canvas =
+        (com.enjoy.agent.workflow.api.request.SaveWorkflowCanvasRequest)
+            service.resumable(execution.getId()).get("canvas");
+    assertThat(canvas.edges().getFirst().sourceNodeIndex()).isZero();
+    assertThat(canvas.edges().getFirst().targetNodeIndex()).isEqualTo(1);
   }
 
   @Test

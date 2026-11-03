@@ -225,6 +225,9 @@ DO UPDATE SET status='RUNNING',attempts=workflow_node_checkpoint.attempts+1,star
 
   private com.enjoy.agent.workflow.api.request.SaveWorkflowCanvasRequest snapshot(
       List<WorkflowNode> nodes, List<WorkflowEdge> edges) {
+    Map<String, Integer> indices = new HashMap<>();
+    for (int index = 0; index < nodes.size(); index++)
+      indices.put(nodes.get(index).getNodeKey(), index);
     var items =
         nodes.stream()
             .map(
@@ -242,8 +245,12 @@ DO UPDATE SET status='RUNNING',attempts=workflow_node_checkpoint.attempts+1,star
             .map(
                 e ->
                     new com.enjoy.agent.workflow.api.request.SaveWorkflowCanvasRequest.EdgeItem(
-                        nodes.indexOf(e.getSourceNode()),
-                        nodes.indexOf(e.getTargetNode()),
+                        Objects.requireNonNull(
+                            indices.get(e.getSourceNode().getNodeKey()),
+                            "Unknown snapshot source node"),
+                        Objects.requireNonNull(
+                            indices.get(e.getTargetNode().getNodeKey()),
+                            "Unknown snapshot target node"),
                         e.getSourceHandle(),
                         e.getTargetHandle()))
             .toList();

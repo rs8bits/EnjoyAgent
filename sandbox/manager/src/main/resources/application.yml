@@ -1,0 +1,21 @@
+server:
+  port: 8091
+spring:
+  servlet:
+    multipart:
+      max-file-size: 200MB
+      max-request-size: 210MB
+sandbox:
+  work-root: ${SANDBOX_WORK_ROOT}
+  token-file: ${SANDBOX_TOKEN_FILE:.sandbox/manager-token}
+  image: ${SANDBOX_RUNTIME_IMAGE:enjoyagent-python:local}
+  document-image: ${SANDBOX_DOCUMENT_IMAGE:enjoyagent-documents:local}
+  namespace: ${SANDBOX_NAMESPACE:enjoyagent-local}
+  max-concurrent: ${SANDBOX_MAX_CONCURRENT:2}
+  max-per-tenant: ${SANDBOX_MAX_PER_TENANT:1}
+  memory-bytes: ${SANDBOX_MEMORY_BYTES:1073741824}
+  cpus: ${SANDBOX_CPUS:1}
+  max-output-bytes: ${SANDBOX_MAX_OUTPUT_BYTES:209715200}
+  max-workspace-bytes: ${SANDBOX_MAX_WORKSPACE_BYTES:1073741824}
+  max-log-bytes: ${SANDBOX_MAX_LOG_BYTES:1048576}
+  retention-hours: ${SANDBOX_RETENTION_HOURS:168}

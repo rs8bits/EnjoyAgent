@@ -13,6 +13,8 @@ EnjoyAgent 是一个基于 Spring Boot 的多租户 AI Agent 平台后端。前�
 - 用户凭证、官方凭证和 AES-GCM 密钥保护
 - OpenAI 兼容模型与阿里百炼模型配置
 - Agent、会话、SSE 流式聊天和对话记忆
+- 通用文件上传、权限、成果清单、预览与下载
+- 独立容器沙箱、PDF/Office 处理、Excel/CSV 分析、Python/DuckDB SQL 执行
 - 文档上传、MinIO 存储、pgvector 与 Elasticsearch 混合检索
 - MCP Server、工具同步、OAuth、调用审批和调用日志
 - 可视化工作流持久化与执行
@@ -52,9 +54,17 @@ cp .env.example .env
 ### 2. 启动基础设施
 
 ```bash
+./scripts/start-sandbox.sh
 docker compose up -d
 docker compose ps
 ```
+
+`start-sandbox.sh` 会生成仅本机可读的管理令牌、构建 Python 执行镜像，并启动沙箱管理服务。
+令牌和执行暂存目录位于被 Git 忽略的 `.sandbox/`。`local` profile 默认启用沙箱；其他环境
+通过 `APP_SANDBOX_ENABLED=true` 显式开启。前端“文件与成果”入口位于 `/app/files`。
+完整的配置、API、隔离边界和验收方式见 [文件交付与沙箱](docs/architecture/file-delivery-sandbox.md)。
+Agent 设置中开启“文件处理与代码执行”后，聊天可以附加文件并生成成果；工作流画布新增
+“文件处理 / 沙箱”节点。首次构建需要下载分析库、LibreOffice 和中文字体。
 
 Compose 默认仅把服务绑定到 `127.0.0.1`：
 
