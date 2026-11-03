@@ -22,6 +22,36 @@ EnjoyAgent 是一个基于 Spring Boot 的多租户 AI Agent 平台后端。前�
 - 共享市场、资产安装和管理员审核
 - 用户 + 租户唯一的 AI 客服、LLM 工具规划、轻量摘要记忆、安全确认和调用归档
 
+## 文件处理与成果交付预览
+
+以下截图于 2026-11-03 在本地 Chrome 浏览器中采集，使用虚构销售数据。文件处理实际运行于 Docker 沙箱，产物存储于 MinIO；模型相关验收使用本地确定性模拟服务。
+
+### 文件工作台
+
+选择输入文件和处理类型，提交 Excel / CSV 汇总任务。
+
+![文件工作台](docs/images/file-delivery-workspace.jpg)
+
+### 任务日志与成果清单
+
+查看退出码、耗时、CPU、采样峰值内存、stdout / stderr，以及带生成步骤的成果。
+
+![任务日志与成果清单](docs/images/sandbox-task-details.jpg)
+
+### Excel 成果预览
+
+直接预览汇总表，并下载 Excel 原文件。
+
+![Excel 成果预览](docs/images/artifact-table-preview.jpg)
+
+### 沙箱工作流执行
+
+串联 Python 文件处理与 SQL 分组汇总，查看最终输出和执行历史。
+
+![沙箱工作流执行](docs/images/sandbox-workflow-run.jpg)
+
+浏览器操作、结果校验和验收范围见 [本地浏览器验收记录](docs/testing/browser-sandbox-acceptance.md)。
+
 ## 技术栈
 
 - Java 21、Spring Boot 3.5、Spring Security、Spring Data JPA
